@@ -148,7 +148,8 @@ jobs:
             echo "::error::apksigner could not verify $APK."
             exit 1
           fi
-          sha=$(printf '%s\n' "$out" | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+).*$/\1/p' | head -n 1)
+          # "Signer #1 certificate SHA-256 digest:" before build-tools 37, "V2 Signer: certificate ..." after.
+          sha=$(printf '%s\n' "$out" | sed -nE 's/^.*[Ss]igner.* certificate SHA-256 digest: ([0-9a-f]+).*$/\1/p' | head -n 1)
           want=$(keytool -exportcert -keystore rhytmaniac-release.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
             -alias "$ANDROID_KEY_ALIAS" | sha256sum | cut -d' ' -f1)
           if [ -z "$sha" ] || [ "$sha" != "$want" ]; then
