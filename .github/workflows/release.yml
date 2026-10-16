@@ -136,11 +136,27 @@ jobs:
       - name: Read signing certificate
         if: steps.signing.outputs.ready == 'true'
         id: cert
+        env:
+          APK: dist/${{ env.APP_NAME }}-${{ steps.version.outputs.tag }}.apk
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)/apksigner"
-          sha=$("$apksigner" verify --print-certs "dist/${APP_NAME}-${{ steps.version.outputs.tag }}.apk" \
-            | sed -nE 's/^Signer #1 certificate SHA-256 digest: (.*)$/\1/p' | head -n 1)
-          if [ -z "$sha" ]; then echo "::error::The APK is not signed with the release key."; exit 1; fi
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
+          echo "Using $apksigner"
+          if ! out="$("$apksigner" verify --print-certs "$APK" 2>&1)"; then
+            printf '%s\n' "$out"
+            echo "::error::apksigner could not verify $APK."
+            exit 1
+          fi
+          sha=$(printf '%s\n' "$out" | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+).*$/\1/p' | head -n 1)
+          want=$(keytool -exportcert -keystore rhytmaniac-release.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" | sha256sum | cut -d' ' -f1)
+          if [ -z "$sha" ] || [ "$sha" != "$want" ]; then
+            printf '%s\n' "$out"
+            echo "Release key certificate SHA-256: $want"
+            echo "::error::The APK is not signed with the release key."
+            exit 1
+          fi
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Remove signing material
