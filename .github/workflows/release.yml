@@ -99,7 +99,17 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > rhytmaniac-release.jks
+          # Tolerate secrets pasted with line wraps, CRLF or certutil BEGIN/END lines.
+          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | sed '/^-----/d' | tr -d ' \t\r\n"' \
+              | base64 --decode > rhytmaniac-release.jks; then
+            echo "::error title=Bad keystore secret::ANDROID_KEYSTORE_BASE64 is not valid base64. Re-create it from rhytmaniac-release.jks (see README, 'Release signing')."
+            exit 1
+          fi
+          if ! keytool -list -keystore rhytmaniac-release.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -alias "$ANDROID_KEY_ALIAS" > /dev/null; then
+            echo "::error title=Bad signing secrets::Keystore, ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS do not match."
+            exit 1
+          fi
           cat > key.properties <<EOF
           storeFile=rhytmaniac-release.jks
           storePassword=$ANDROID_KEYSTORE_PASSWORD
