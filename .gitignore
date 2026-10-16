@@ -1,0 +1,83 @@
+# ─── Release signing: NEVER commit ───────────────────────────────────────────
+# The keystore and its passwords stay on your machines and in GitHub secrets.
+key.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.b64
+*.base64
+
+# ─── Markdown: only the README is public ─────────────────────────────────────
+# Keeps CLAUDE.md, notes and drafts local.
+*.md
+!README.md
+
+# ─── Flutter / Dart / Pub ────────────────────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+/coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.widget_preview/
+app.*.symbols
+app.*.map.json
+
+# ─── Android ─────────────────────────────────────────────────────────────────
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/.gradle/
+/android/.kotlin/
+/android/captures/
+/android/local.properties
+/android/gradlew
+/android/gradlew.bat
+/android/gradle/wrapper/gradle-wrapper.jar
+**/GeneratedPluginRegistrant.java
+**/.cxx/
+*.apk
+*.aab
+
+# ─── iOS / macOS ─────────────────────────────────────────────────────────────
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/xcuserdata/
+*.xcworkspace/xcuserdata/
+.swiftpm/
+
+# ─── IDEs and editors ────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*~
+.history/
+.atom/
+
+# ─── Tools and OS ────────────────────────────────────────────────────────────
+.claude/
+__pycache__/
+*.pyc
+*.class
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+.build/
+.buildlog/
+.svn/
+migrate_working_dir/

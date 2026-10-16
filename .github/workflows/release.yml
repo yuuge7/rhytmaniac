@@ -1,0 +1,156 @@
+# Every push to main publishes a new GitHub release named "Rhytmaniac vX.Y".
+#
+# - The version is derived from existing tags (see .github/scripts/next-version.sh):
+#   v1.0, v1.1, v1.2, ... so a release is never overwritten. Bump the major in
+#   pubspec.yaml to start a new series.
+# - The Android versionCode is the commit count on main, so every build installs
+#   over the previous one.
+# - APKs are signed with the release key from repository secrets.
+# - Put "[skip release]" in a commit message to push without releasing.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Releases run one at a time so two quick pushes can't claim the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  APP_NAME: Rhytmaniac
+  FLUTTER_VERSION: 3.47.0
+
+jobs:
+  release:
+    name: Build and publish
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out (full history and tags)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check signing secrets
+        id: signing
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning title=Release skipped::Add the ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD repository secrets to publish releases (see README, 'Release signing')."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute version
+        id: version
+        run: |
+          git fetch --tags --force
+          git tag --list 'v*' | bash .github/scripts/next-version.sh pubspec.yaml >> "$GITHUB_OUTPUT"
+          echo "code=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Show version
+        run: |
+          echo "Tag:          ${{ steps.version.outputs.tag }}"
+          echo "Title:        ${{ steps.version.outputs.title }}"
+          echo "Build name:   ${{ steps.version.outputs.name }}"
+          echo "Build number: ${{ steps.version.outputs.code }}"
+          if git rev-parse -q --verify "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null; then
+            echo "::error::Tag ${{ steps.version.outputs.tag }} already exists."
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Restore release signing key
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > rhytmaniac-release.jks
+          cat > key.properties <<EOF
+          storeFile=rhytmaniac-release.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Build APKs
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
+          CODE: ${{ steps.version.outputs.code }}
+        run: |
+          mkdir -p dist
+          flutter build apk --release --build-name="$NAME" --build-number="$CODE"
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/${APP_NAME}-${TAG}.apk"
+          flutter build apk --release --split-per-abi --build-name="$NAME" --build-number="$CODE"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-${abi}-release.apk" "dist/${APP_NAME}-${TAG}-${abi}.apk"
+          done
+          ls -la dist
+
+      - name: Read signing certificate
+        if: steps.signing.outputs.ready == 'true'
+        id: cert
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)/apksigner"
+          sha=$("$apksigner" verify --print-certs "dist/${APP_NAME}-${{ steps.version.outputs.tag }}.apk" \
+            | sed -nE 's/^Signer #1 certificate SHA-256 digest: (.*)$/\1/p' | head -n 1)
+          if [ -z "$sha" ]; then echo "::error::The APK is not signed with the release key."; exit 1; fi
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f rhytmaniac-release.jks key.properties
+
+      - name: Publish release
+        if: steps.signing.outputs.ready == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.title }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*.apk
+          body: |
+            **Install:** download `${{ env.APP_NAME }}-${{ steps.version.outputs.tag }}.apk` on your Android phone and open it (allow installs from your browser or file manager when asked). It updates any earlier release in place and keeps your library.
+
+            Smaller per-device builds: `arm64-v8a` (most phones from 2017 on), `armeabi-v7a` (older 32-bit phones), `x86_64` (emulators).
+
+            Version ${{ steps.version.outputs.name }} · build ${{ steps.version.outputs.code }} · signing certificate SHA-256 `${{ steps.cert.outputs.sha256 }}`
