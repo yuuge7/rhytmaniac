@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'timing.dart';
+
 /// A detected note onset.
 class Onset {
   const Onset({
@@ -96,10 +98,12 @@ class SongAnalysis {
     required this.sustains,
     required this.waveformResolutionMs,
     required this.waveform,
+    this.timingPoints = const [],
     this.formatVersion = currentFormatVersion,
   });
 
-  static const currentFormatVersion = 1;
+  /// 2: [timingPoints] (tempo changes, triplet sections).
+  static const currentFormatVersion = 2;
 
   final int formatVersion;
   final int sampleRate;
@@ -126,6 +130,15 @@ class SongAnalysis {
 
   /// Peak amplitude per bucket, 0..1.
   final List<double> waveform;
+
+  /// Tempo sections when the tempo changes or a part moves in triplets.
+  /// Empty: one straight section at [bpm] from [beatOffsetMs].
+  final List<TimingPoint> timingPoints;
+
+  /// The beat grid: [timingPoints], or the single [bpm] grid.
+  BeatGrid get grid => timingPoints.isNotEmpty
+      ? BeatGrid(timingPoints)
+      : BeatGrid.single(bpm: bpm, offsetMs: beatOffsetMs, barOffsetBeats: barOffsetBeats);
 
   double get beatLengthMs => 60000.0 / bpm;
 
@@ -182,6 +195,7 @@ class SongAnalysis {
           'high': energyHigh.map(_r3).toList(),
         },
         'sustains': sustains.map((s) => s.toJson()).toList(),
+        if (timingPoints.isNotEmpty) 'timingPoints': timingPoints.map((t) => t.toJson()).toList(),
         'waveform': {
           'resolutionMs': waveformResolutionMs,
           'peaks': waveform.map(_r3).toList(),
@@ -219,6 +233,9 @@ class SongAnalysis {
           .toList(),
       waveformResolutionMs: (w['resolutionMs'] as num).toDouble(),
       waveform: nums(w['peaks']),
+      timingPoints: (j['timingPoints'] as List? ?? const [])
+          .map((t) => TimingPoint.fromJson((t as Map).cast<String, dynamic>()))
+          .toList(),
     );
   }
 

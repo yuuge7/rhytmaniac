@@ -1,10 +1,14 @@
 package com.rhytmaniac.rhytmaniac
 
+import android.Manifest
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
@@ -24,26 +28,48 @@ import java.util.concurrent.Executors
  * - Saving exports into the public Downloads folder via MediaStore.
  * - Audio decoding (MediaExtractor + MediaCodec) to mono 16-bit PCM.
  * - Tag / cover extraction (MediaMetadataRetriever).
+ * Music and hit sounds live in [GameAudio] on the `rhytmaniac/audio` channel.
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "rhytmaniac/native"
     private val executor = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
     private lateinit var channel: MethodChannel
+    private var audio: GameAudio? = null
 
     private var pendingResult: MethodChannel.Result? = null
     private var pendingSaveSource: String? = null
+
+    /** A Downloads save waiting for the storage permission (Android 9 and older). */
+    private var pendingDownload: Triple<String, String, MethodChannel.Result>? = null
 
     companion object {
         private const val REQ_PICK_FILE = 4101
         private const val REQ_PICK_FOLDER = 4102
         private const val REQ_CREATE_DOC = 4103
+        private const val REQ_WRITE_STORAGE = 4104
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         channel.setMethodCallHandler { call, result -> handle(call, result) }
+        val audioChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "rhytmaniac/audio")
+        val engine = GameAudio(applicationContext, audioChannel)
+        audioChannel.setMethodCallHandler { call, result -> engine.handle(call, result) }
+        audio = engine
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Music never keeps playing behind another app or the home screen.
+        audio?.onHostPause()
+    }
+
+    override fun onDestroy() {
+        audio?.release()
+        audio = null
+        super.onDestroy()
     }
 
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
@@ -72,12 +98,23 @@ class MainActivity : FlutterActivity() {
                     ) { p -> main.post { channel.invokeMethod("decodeProgress", mapOf("id" to id, "progress" to p)) } }
                 }
             }
-            "saveToDownloads" -> background(result) {
-                saveToDownloads(
-                    call.argument<String>("source")!!,
-                    call.argument<String>("name")!!,
-                    call.argument<String>("mime") ?: "application/octet-stream",
-                )
+            "saveToDownloads" -> {
+                val source = call.argument<String>("source")!!
+                val name = call.argument<String>("name")!!
+                val mime = call.argument<String>("mime") ?: "application/octet-stream"
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                    checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    // Ask once; the answer arrives in onRequestPermissionsResult.
+                    if (pendingDownload != null) {
+                        result.error("busy", "Already asking for storage access", null)
+                    } else {
+                        pendingDownload = Triple(source, name, result)
+                        requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQ_WRITE_STORAGE)
+                    }
+                } else {
+                    background(result) { saveToDownloads(source, name, mime) }
+                }
             }
             "saveToFolder" -> background(result) {
                 saveToFolder(
@@ -138,6 +175,19 @@ class MainActivity : FlutterActivity() {
             putExtra(Intent.EXTRA_TITLE, name)
         }
         startActivityForResult(intent, REQ_CREATE_DOC)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_WRITE_STORAGE) return
+        val (source, name, result) = pendingDownload ?: return
+        pendingDownload = null
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            background(result) { saveToDownloads(source, name, "application/octet-stream") }
+        } else {
+            // Without the permission, Dart falls back to the system save dialog.
+            result.error("UnsupportedOperationException", "needs_saf", null)
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -220,9 +270,7 @@ class MainActivity : FlutterActivity() {
     // --- Saving exports -------------------------------------------------------------
 
     private fun saveToDownloads(source: String, name: String, mime: String): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            throw UnsupportedOperationException("needs_saf")
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return saveToDownloadsLegacy(source, name)
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -239,6 +287,24 @@ class MainActivity : FlutterActivity() {
         values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
         return "Download/Rhytmaniac/$name"
+    }
+
+    /** Android 9 and older: write the file straight into Download/Rhytmaniac. */
+    @Suppress("DEPRECATION")
+    private fun saveToDownloadsLegacy(source: String, name: String): String {
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Rhytmaniac")
+        if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("Could not create Download/Rhytmaniac")
+        // Never overwrite: "name (2).ext" and so on.
+        val dot = name.indexOf('.').let { if (it <= 0) name.length else it }
+        var target = File(dir, name)
+        var n = 2
+        while (target.exists()) {
+            target = File(dir, "${name.substring(0, dot)} ($n)${name.substring(dot)}")
+            n++
+        }
+        FileInputStream(source).use { input -> target.outputStream().use { input.copyTo(it, 1 shl 16) } }
+        MediaScannerConnection.scanFile(this, arrayOf(target.absolutePath), null, null)
+        return "Download/Rhytmaniac/${target.name}"
     }
 
     private fun saveToFolder(tree: Uri, source: String, name: String, mime: String): String {

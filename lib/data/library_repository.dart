@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:sembast/sembast.dart';
 
 import '../core/models/analysis.dart';
 import '../core/models/beatmap.dart';
+import '../core/models/replay.dart';
 import '../core/models/score.dart';
 import '../core/models/song.dart';
 import 'settings.dart';
@@ -80,6 +82,7 @@ class LibraryRepository {
         objectCount: b.objectCount,
         createdAt: b.createdAt,
         lanes: b.difficulty.lanes,
+        origin: b.origin,
       );
 
   Future<BeatmapSummary> saveBeatmap(Beatmap b) async {
@@ -115,6 +118,21 @@ class LibraryRepository {
       }
     });
     return added;
+  }
+
+  // --- replays ----------------------------------------------------------------------
+
+  Future<void> saveReplay(Replay r) async {
+    final f = File(paths.replayFile(r.scoreId));
+    await f.parent.create(recursive: true);
+    await f.writeAsBytes(gzip.encode(utf8.encode(jsonEncode(r.toJson()))), flush: true);
+  }
+
+  Future<Replay?> loadReplay(String scoreId) async {
+    final f = File(paths.replayFile(scoreId));
+    if (!await f.exists()) return null;
+    final j = jsonDecode(utf8.decode(gzip.decode(await f.readAsBytes()))) as Map<String, dynamic>;
+    return Replay.fromJson(j);
   }
 
   // --- key-value -------------------------------------------------------------------

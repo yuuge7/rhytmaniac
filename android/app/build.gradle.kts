@@ -70,3 +70,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Music playback (GameAudio.kt). Same version video_player_android already
+    // pulls in, so the build carries one copy of ExoPlayer.
+    implementation("androidx.media3:media3-exoplayer:1.9.2")
+}

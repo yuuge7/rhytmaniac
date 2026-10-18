@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
 
 import '../../core/generator/beatmap_generator.dart';
 import '../../core/models/analysis.dart';
@@ -37,7 +36,7 @@ class EditorScreen extends ConsumerStatefulWidget {
 class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerProviderStateMixin {
   late final EditorState ed;
   AudioLease? _lease;
-  AudioPlayer get _player => _lease!.player;
+  MusicPlayer get _player => _lease!.player;
   late final Ticker _ticker;
   SongClock? _clock;
   bool _ready = false;
@@ -61,7 +60,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
     }
     final first = ed.map.firstObjectMs;
     ed.seek(math.max(0, first - 1000));
-    await _player.seek(Duration(milliseconds: ed.timeMs.round()));
+    await _player.seek(ed.timeMs);
     if (mounted) setState(() => _ready = true);
   }
 
@@ -81,7 +80,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
   void _tick(Duration _) {
     final c = _clock;
     if (c == null) return;
-    if (_player.playing) c.sync(_player.position.inMicroseconds / 1000.0);
+    if (_player.playing) c.sync(_player.positionMs);
     ed.setTimeFromPlayback(c.timeMs);
     if (ed.timeMs >= widget.analysis.durationMs) _togglePlay();
   }
@@ -96,7 +95,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
     } else {
       _lease!.reclaim();
       await _player.setSpeed(ed.playbackRate);
-      await _player.seek(Duration(milliseconds: ed.timeMs.round()));
+      await _player.seek(ed.timeMs);
       _clock = SongClock(rate: ed.playbackRate)..start(ed.timeMs);
       ed.playing = true;
       _player.play();
@@ -106,7 +105,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
   }
 
   Future<void> _scrubEnd() async {
-    if (!_player.playing) await _player.seek(Duration(milliseconds: ed.timeMs.round()));
+    if (!_player.playing) await _player.seek(ed.timeMs);
   }
 
   Future<bool> _confirmLeave() async {
@@ -235,7 +234,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
         child: Row(children: [
           Text('Snap', style: AppText.body(12.5, color: Palette.mist)),
           const SizedBox(width: 6),
-          for (final d in const [1, 2, 4, 8])
+          for (final d in const [1, 2, 3, 4, 6, 8])
             Padding(
               padding: const EdgeInsets.only(right: 4),
               child: ChoiceChip(

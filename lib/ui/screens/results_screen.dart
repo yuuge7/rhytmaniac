@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../audio/app_audio.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
 import '../../core/models/score.dart';
@@ -12,6 +13,14 @@ import '../../core/scoring/score_processor.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+
+/// One sample of how the run was going, for the results graph.
+class RunSample {
+  const RunSample(this.timeMs, this.health, this.accuracy);
+  final double timeMs;
+  final double health;
+  final double accuracy;
+}
 
 class RunResult {
   const RunResult({
@@ -23,6 +32,8 @@ class RunResult {
     required this.windows,
     this.record,
     this.previousBest,
+    this.timeline = const [],
+    this.replayOf,
   });
 
   final Song song;
@@ -33,14 +44,22 @@ class RunResult {
   final HitWindows windows;
   final ScoreRecord? record;
   final ScoreRecord? previousBest;
+  final List<RunSample> timeline;
+
+  /// Set when this was a replay: whose run it was.
+  final String? replayOf;
 
   bool get isNewBest => record != null && (previousBest == null || record!.score > previousBest!.score);
 }
 
 class ResultsScreen extends ConsumerStatefulWidget {
-  const ResultsScreen({super.key, required this.result, required this.onRetry});
+  const ResultsScreen({super.key, required this.result, required this.onRetry, this.music, this.onWatchReplay});
   final RunResult result;
   final void Function(BuildContext) onRetry;
+
+  /// The song keeps playing under the results; released when they close.
+  final AudioLease? music;
+  final void Function(BuildContext)? onWatchReplay;
 
   @override
   ConsumerState<ResultsScreen> createState() => _ResultsScreenState();
@@ -58,15 +77,21 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
   }
 
   @override
+  void dispose() {
+    widget.music?.release();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = r.processor;
     final grade = p.grade;
-    final total = r.map.judgmentCount;
-    final fc = p.counts[Judgment.miss] == 0 && p.judged >= total;
+    final total = p.maxPossibleCombo;
+    final fc = p.counts[Judgment.miss] == 0 && p.ticksMissed == 0 && p.judged >= p.totalJudgments;
     return Scaffold(
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.close_rounded), tooltip: 'Close', onPressed: () => Navigator.of(context).pop()),
-        title: const Text('Results'),
+        title: Text(r.replayOf != null ? 'Replay · ${r.replayOf}' : 'Results'),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(Space.gutter, 4, Space.gutter, 24),
@@ -82,7 +107,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (r.isNewBest) _tag('New best', Palette.amber),
+                      if (r.isNewBest && r.replayOf == null) _tag('New best', Palette.amber),
                       if (fc) _tag(p.counts[Judgment.perfect] == p.judged ? 'All perfect' : 'Full combo', Palette.flare),
                       const SizedBox(height: 6),
                       Text(r.song.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppText.display(19, width: 110, weight: 750)),
@@ -120,6 +145,18 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
           ),
           const SectionLabel('Judgments', padding: EdgeInsets.fromLTRB(0, 22, 0, 10)),
           _JudgmentBars(counts: p.counts),
+          if (p.ticksHit + p.ticksMissed > 0) ...[
+            const SizedBox(height: 6),
+            Text('Slider ticks ${p.ticksHit} / ${p.ticksHit + p.ticksMissed}${p.bonus > 0 ? ' · spinner bonus +${formatScore(p.bonus)}' : ''}',
+                style: AppText.data(12, color: Palette.mist)),
+          ] else if (p.bonus > 0) ...[
+            const SizedBox(height: 6),
+            Text('Spinner bonus +${formatScore(p.bonus)}', style: AppText.data(12, color: Palette.mist)),
+          ],
+          if (r.timeline.length >= 4) ...[
+            const SectionLabel('Performance', padding: EdgeInsets.fromLTRB(0, 22, 0, 10)),
+            _PerformanceGraph(samples: r.timeline),
+          ],
           const SectionLabel('Timing', padding: EdgeInsets.fromLTRB(0, 22, 0, 10)),
           if (p.errors.length < 5)
             Text('Not enough hits to chart timing.', style: AppText.body(14, color: Palette.mist))
@@ -137,6 +174,14 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
             ],
           ],
           const SizedBox(height: 26),
+          if (widget.onWatchReplay != null) ...[
+            OutlinedButton.icon(
+              onPressed: () => widget.onWatchReplay!(context),
+              icon: const Icon(Icons.slideshow_rounded),
+              label: Text(r.replayOf != null ? 'Watch again' : 'Watch replay'),
+            ),
+            const SizedBox(height: 10),
+          ],
           Row(children: [
             Expanded(
               child: OutlinedButton.icon(
@@ -208,6 +253,79 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
           Text(value, style: AppText.data(15, weight: 600, color: Palette.bone)),
         ],
       );
+}
+
+/// Health (amber) and accuracy (bone) across the run, like osu!'s ranking
+/// graph.
+class _PerformanceGraph extends StatelessWidget {
+  const _PerformanceGraph({required this.samples});
+  final List<RunSample> samples;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(height: 96, child: CustomPaint(painter: _GraphPainter(samples))),
+      const SizedBox(height: 6),
+      Row(children: [
+        Container(width: 14, height: 3, color: Palette.amber),
+        const SizedBox(width: 6),
+        Text('Health', style: AppText.body(12, color: Palette.mist)),
+        const SizedBox(width: 16),
+        Container(width: 14, height: 1.5, color: Palette.bone),
+        const SizedBox(width: 6),
+        Text('Accuracy (70–100%)', style: AppText.body(12, color: Palette.mist)),
+      ]),
+    ]);
+  }
+}
+
+class _GraphPainter extends CustomPainter {
+  _GraphPainter(this.samples);
+  final List<RunSample> samples;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final t0 = samples.first.timeMs, t1 = samples.last.timeMs;
+    final span = math.max(1.0, t1 - t0);
+    double x(double t) => (t - t0) / span * size.width;
+    final bg = Paint()..color = Palette.surface;
+    canvas.drawRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(8)), bg);
+    final grid = Paint()..color = Palette.line.withValues(alpha: 0.6);
+    canvas.drawRect(Rect.fromLTWH(0, size.height * 0.5, size.width, 1), grid);
+
+    final health = Path(), acc = Path();
+    for (var i = 0; i < samples.length; i++) {
+      final s = samples[i];
+      final hy = size.height - 4 - s.health.clamp(0.0, 1.0) * (size.height - 8);
+      // Accuracy from 70% to 100% fills the height.
+      final ay = size.height - 4 - ((s.accuracy - 0.7) / 0.3).clamp(0.0, 1.0) * (size.height - 8);
+      if (i == 0) {
+        health.moveTo(x(s.timeMs), hy);
+        acc.moveTo(x(s.timeMs), ay);
+      } else {
+        health.lineTo(x(s.timeMs), hy);
+        acc.lineTo(x(s.timeMs), ay);
+      }
+    }
+    canvas.drawPath(
+      health,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeJoin = StrokeJoin.round
+        ..color = Palette.amber,
+    );
+    canvas.drawPath(
+      acc,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = Palette.bone.withValues(alpha: 0.8),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_GraphPainter old) => old.samples != samples;
 }
 
 class _JudgmentBars extends StatelessWidget {

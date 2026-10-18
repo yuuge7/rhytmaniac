@@ -45,6 +45,68 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     }
   }
 
+  /// Lets the player choose what kind of file to bring in.
+  Future<void> _chooseImport() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, 8),
+            child: Text('Import', style: AppText.display(22, width: 120, weight: 800)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.music_note_rounded),
+            title: const Text('Song or video'),
+            subtitle: const Text('MP4, MP3, M4A, OGG or WAV. Maps are generated for you.'),
+            onTap: () => Navigator.pop(c, 'song'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.radio_button_checked_rounded),
+            title: const Text('osu! beatmap set'),
+            subtitle: const Text('An .osz file. osu! and osu!mania difficulties become Circles and Tiles.'),
+            onTap: () => Navigator.pop(c, 'osz'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.inventory_2_outlined),
+            title: const Text('Rhytmaniac song pack'),
+            subtitle: const Text('A .rhpack.zip shared from another phone.'),
+            onTap: () => Navigator.pop(c, 'pack'),
+          ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    switch (choice) {
+      case 'song':
+        await _import();
+      case 'osz':
+        await _importOsz();
+      case 'pack':
+        await _importPack();
+    }
+  }
+
+  Future<void> _importOsz() async {
+    try {
+      // .osz has no registered type on most phones, so show every file.
+      final file = await NativeBridge.instance.pickFile(const ['*/*']);
+      if (file == null) return;
+      final r = await ref.read(importProvider.notifier).importOsz(file);
+      if (r == null || !mounted) return;
+      final n = r.added.length;
+      final skipped = r.skipped.isEmpty ? '' : ' Skipped ${r.skipped.length}: ${r.skipped.map((s) => '${s.version} (${s.reason})').join(', ')}.';
+      showMessage(
+        context,
+        n == 0
+            ? 'No playable difficulties in this set.$skipped'
+            : 'Added $n osu! difficult${n == 1 ? 'y' : 'ies'} to “${r.song.title}”.$skipped',
+      );
+    } catch (e) {
+      if (mounted) showMessage(context, 'Could not open the file: $e');
+    }
+  }
+
   Future<void> _importPack() async {
     try {
       final file = await NativeBridge.instance.pickFile(const ['application/zip', 'application/octet-stream']);
@@ -91,11 +153,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _import,
+        onPressed: _chooseImport,
         backgroundColor: Palette.action,
         foregroundColor: Palette.onAction,
         icon: const Icon(Icons.add_rounded),
-        label: Text('Import song', style: AppText.body(15, weight: 650, color: Palette.onAction)),
+        label: Text('Import', style: AppText.body(15, weight: 650, color: Palette.onAction)),
       ),
       body: SafeArea(
         bottom: false,
@@ -105,7 +167,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             if (jobs.isNotEmpty)
               SliverList.list(children: [for (final j in jobs) _ImportCard(job: j)]),
             if (lib.songs.isEmpty && jobs.isEmpty)
-              SliverFillRemaining(hasScrollBody: false, child: _EmptyLibrary(onImport: _import))
+              SliverFillRemaining(hasScrollBody: false, child: _EmptyLibrary(onImport: _chooseImport))
             else if (songs.isEmpty && _query.isNotEmpty)
               SliverToBoxAdapter(
                 child: Padding(
@@ -157,9 +219,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 color: Palette.raised,
                 onSelected: (v) {
                   if (v == 'pack') _importPack();
+                  if (v == 'osz') _importOsz();
                   if (v == 'demo') ref.read(importProvider.notifier).installDemo();
                 },
                 itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'osz', child: Text('Import osu! beatmap…')),
                   const PopupMenuItem(value: 'pack', child: Text('Import song pack…')),
                   if (!lib.songs.any((s) => s.isDemo)) const PopupMenuItem(value: 'demo', child: Text('Add demo song')),
                 ],
@@ -381,12 +445,12 @@ class _EmptyLibrary extends StatelessWidget {
           Text('Bring your own music', style: AppText.display(24, width: 125, weight: 800), textAlign: TextAlign.center),
           const SizedBox(height: 10),
           Text(
-            'Import an MP4, MP3, M4A or WAV from your phone. Rhytmaniac finds the beat and builds Tiles and Circles maps from Easy to Expert.',
+            'Import an MP4, MP3, M4A or WAV from your phone. Rhytmaniac finds the beat and builds Tiles and Circles maps from Easy to Expert. osu! beatmap sets (.osz) work too.',
             style: AppText.body(14.5, color: Palette.mist),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
-          FilledButton.icon(onPressed: onImport, icon: const Icon(Icons.add_rounded), label: const Text('Import song')),
+          FilledButton.icon(onPressed: onImport, icon: const Icon(Icons.add_rounded), label: const Text('Import')),
         ],
       ),
     );

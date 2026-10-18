@@ -4,10 +4,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/geometry/slider_curve.dart';
 import '../../core/models/beatmap.dart';
+import '../../core/models/timing.dart';
 import '../../game/circles_painter.dart';
 import '../theme.dart';
 import 'editor_state.dart';
-import 'tiles_editor_view.dart' show beatLineColor;
+import 'tiles_editor_view.dart' show gridLineColor;
 
 /// Playfield preview at the playhead plus a horizontal timeline to scrub.
 /// Circle tool: tap to place. Slider tool: drag from start to end, then bend
@@ -52,7 +53,7 @@ class _CirclesEditorViewState extends State<CirclesEditorView> {
     final r = ed.map.difficulty.circleRadius;
     for (final i in ed.visibleCircleIndices()) {
       final o = ed.map.circleObjects[i];
-      if (!o.isSlider || o.path == null || o.path!.length < 3) continue;
+      if (!o.isSlider || o.path == null || o.path!.length != 3 || o.curve != SliderPathKind.bezier) continue;
       if (playfieldDistance(p, o.path![1]) <= r * 0.8) return i;
     }
     return null;
@@ -237,7 +238,7 @@ class _PlayfieldPainter extends CustomPainter {
         continue;
       }
       if (o.isSlider && o.path != null) {
-        final curve = SliderCurve(o.path!, samples: 32);
+        final curve = SliderCurve.of(o, samples: 32)!;
         final path = Path();
         final pts = curve.points.map(layout.toScreen).toList();
         path.moveTo(pts.first.dx, pts.first.dy);
@@ -254,8 +255,8 @@ class _PlayfieldPainter extends CustomPainter {
           ..color = Color.lerp(Palette.inkDeep, color, 0.3)!.withValues(alpha: alpha)
           ..strokeWidth = r * 1.8;
         canvas.drawPath(path, stroke);
-        // Bend handle.
-        if (o.path!.length >= 3) {
+        // Bend handle (generated three-point sliders only).
+        if (o.path!.length == 3 && o.curve == SliderPathKind.bezier) {
           final h = layout.toScreen(o.path![1]);
           p.color = Palette.amber.withValues(alpha: alpha);
           canvas.drawCircle(h, 9, p);
@@ -327,13 +328,10 @@ class _TimelinePainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTRB(x(i * res), mid - h, x((i + 1) * res) + 0.4, mid + h), p);
     }
     // Beat ticks.
-    final step = a.beatLengthMs / ed.snapDivisor;
-    var k = ((t0 - a.beatOffsetMs) / step).floor();
-    for (var t = a.beatOffsetMs + k * step; t <= t1; t += step, k++) {
-      if (t < 0) continue;
-      p.color = beatLineColor(k, ed.snapDivisor, a.barOffsetBeats);
-      final major = k % ed.snapDivisor == 0;
-      canvas.drawRect(Rect.fromLTWH(x(t) - 0.5, size.height - (major ? 22 : 12), 1, major ? 22 : 12), p);
+    for (final l in ed.grid.lines(math.max(0.0, t0), t1, ed.snapDivisor)) {
+      p.color = gridLineColor(l, ed.snapDivisor);
+      final major = l.kind != GridLineKind.sub;
+      canvas.drawRect(Rect.fromLTWH(x(l.timeMs) - 0.5, size.height - (major ? 22 : 12), 1, major ? 22 : 12), p);
     }
     // Objects.
     final y = size.height * 0.78;

@@ -9,6 +9,7 @@ import 'data/library_repository.dart';
 import 'data/pack_service.dart';
 import 'data/storage.dart';
 import 'state/providers.dart';
+import 'ui/routes.dart';
 import 'ui/screens/home_shell.dart';
 import 'ui/theme.dart';
 
@@ -58,6 +59,7 @@ class RhytmaniacApp extends StatelessWidget {
       theme: buildTheme(),
       darkTheme: buildTheme(),
       themeMode: ThemeMode.dark,
+      navigatorObservers: [routeObserver],
       home: const HomeShell(),
     );
   }

@@ -3,11 +3,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
 
 import '../../audio/app_audio.dart';
 import '../../core/generator/note_selection.dart';
 import '../../core/models/analysis.dart';
+import '../../core/models/timing.dart';
 import '../../core/models/song.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
@@ -27,10 +27,10 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   SongAnalysis? _a;
   List<TimeRange> _breaks = const [];
   AudioLease? _lease;
-  AudioPlayer get _player => _lease!.player;
+  MusicPlayer get _player => _lease!.player;
   final _scroll = ScrollController();
   double _pxPerSec = 160;
-  StreamSubscription<Duration>? _posSub;
+  Timer? _posTimer;
   double _posMs = 0;
   bool _follow = true;
 
@@ -44,9 +44,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     final services = ref.read(servicesProvider);
     final a = await services.repo.analysis(widget.song.id);
     _lease = await AppAudio.instance.open(services.paths.sourceFile(widget.song.id, widget.song.sourceFile));
-    _posSub = _player.positionStream.listen((p) {
-      if (!mounted) return;
-      setState(() => _posMs = p.inMilliseconds.toDouble());
+    _posTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted || (!_player.playing && _player.positionMs == _posMs)) return;
+      setState(() => _posMs = _player.positionMs);
       if (_follow && _player.playing && _scroll.hasClients) {
         final x = _posMs / 1000 * _pxPerSec - MediaQuery.sizeOf(context).width * 0.3;
         _scroll.jumpTo(x.clamp(0.0, _scroll.position.maxScrollExtent));
@@ -61,7 +61,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 
   @override
   void dispose() {
-    _posSub?.cancel();
+    _posTimer?.cancel();
     _lease?.release();
     _scroll.dispose();
     super.dispose();
@@ -80,7 +80,12 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
                   child: Wrap(spacing: 18, runSpacing: 8, children: [
-                    _fact('BPM', a.bpm.toStringAsFixed(2)),
+                    if (a.timingPoints.length > 1)
+                      _fact('BPM', _bpmRange(a))
+                    else
+                      _fact('BPM', a.bpm.toStringAsFixed(2)),
+                    if (a.timingPoints.length > 1) _fact('Sections', '${a.timingPoints.length}'),
+                    if (a.timingPoints.any((t) => t.triplet)) _fact('Feel', 'Triplets in places'),
                     _fact('First beat', '${a.beatOffsetMs.toStringAsFixed(1)} ms'),
                     _fact('Confidence', '${(a.tempoConfidence * 100).round()}%'),
                     _fact('Onsets', '${a.onsets.length}'),
@@ -112,7 +117,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                       child: GestureDetector(
                         onTapUp: (d) {
                           final ms = d.localPosition.dx / _pxPerSec * 1000;
-                          _player.seek(Duration(milliseconds: ms.round()));
+                          _player.seek(ms);
                         },
                         child: CustomPaint(
                           size: Size(a.durationMs / 1000 * _pxPerSec, double.infinity),
@@ -162,6 +167,12 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
     );
   }
 
+  String _bpmRange(SongAnalysis a) {
+    final bpms = a.timingPoints.map((t) => t.bpm).toList()..sort();
+    String f(double v) => v.toStringAsFixed(v % 1 == 0 ? 0 : 1);
+    return bpms.first.round() == bpms.last.round() ? f(bpms.first) : '${f(bpms.first)}–${f(bpms.last)}';
+  }
+
   Widget _fact(String k, String v) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(k, style: AppText.body(11.5, color: Palette.mist)),
         Text(v, style: AppText.data(14, weight: 600, color: Palette.bone)),
@@ -175,8 +186,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 }
 
 class _AnalysisPainter extends CustomPainter {
-  _AnalysisPainter(this.a, this.breaks, this.pxPerSec, this.posMs);
+  _AnalysisPainter(this.a, this.breaks, this.pxPerSec, this.posMs) : grid = a.grid;
   final SongAnalysis a;
+  final BeatGrid grid;
   final List<TimeRange> breaks;
   final double pxPerSec;
   final double posMs;
@@ -198,14 +210,17 @@ class _AnalysisPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTRB(x(b.startMs), 0, x(b.endMs), h), p);
     }
 
-    // Beat grid.
-    final beat = a.beatLengthMs;
-    var k = ((startMs - a.beatOffsetMs) / beat).floor();
-    for (var t = a.beatOffsetMs + k * beat; t < endMs; t += beat, k++) {
-      if (t < 0) continue;
-      final downbeat = ((k - a.barOffsetBeats) % 4 + 4) % 4 == 0;
+    // Beat grid (each tempo section on its own beats).
+    for (final l in grid.lines(math.max(0.0, startMs), endMs, 1)) {
+      final downbeat = l.kind == GridLineKind.downbeat;
       p.color = downbeat ? Palette.bone.withValues(alpha: 0.5) : Palette.line;
-      canvas.drawRect(Rect.fromLTWH(x(t) - 0.5, 0, downbeat ? 1.5 : 1, h), p);
+      canvas.drawRect(Rect.fromLTWH(x(l.timeMs) - 0.5, 0, downbeat ? 1.5 : 1, h), p);
+    }
+    // Section starts: tempo changes (amber) and triplet parts (rose).
+    for (final s in grid.points.skip(1)) {
+      if (s.timeMs < startMs || s.timeMs > endMs) continue;
+      p.color = (s.triplet ? Palette.rose : Palette.amber).withValues(alpha: 0.8);
+      canvas.drawRect(Rect.fromLTWH(x(s.timeMs) - 1, 0, 2, h), p);
     }
 
     // Waveform.

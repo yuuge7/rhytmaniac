@@ -22,6 +22,7 @@ class Song {
     this.status = AnalysisStatus.pending,
     this.fingerprint = const [],
     this.isDemo = false,
+    this.previewMs,
   });
 
   final String id;
@@ -47,6 +48,11 @@ class Song {
   final List<List<double>> fingerprint;
   final bool isDemo;
 
+  /// Where the song-screen preview starts (song ms). Null: about 40% in.
+  final double? previewMs;
+
+  double get previewStartMs => previewMs ?? durationMs * 0.4;
+
   Song copyWith({
     String? title,
     String? artist,
@@ -59,6 +65,7 @@ class Song {
     DateTime? lastPlayedAt,
     AnalysisStatus? status,
     List<List<double>>? fingerprint,
+    double? previewMs,
   }) =>
       Song(
         id: id,
@@ -77,6 +84,7 @@ class Song {
         status: status ?? this.status,
         fingerprint: fingerprint ?? this.fingerprint,
         isDemo: isDemo,
+        previewMs: previewMs ?? this.previewMs,
       );
 
   Map<String, dynamic> toJson() => {
@@ -96,6 +104,7 @@ class Song {
         'status': status.name,
         'fingerprint': fingerprint,
         'isDemo': isDemo,
+        if (previewMs != null) 'previewMs': previewMs,
       };
 
   factory Song.fromJson(Map<String, dynamic> j) => Song(
@@ -117,6 +126,7 @@ class Song {
             .map((c) => (c as List).map((v) => (v as num).toDouble()).toList())
             .toList(),
         isDemo: j['isDemo'] as bool? ?? false,
+        previewMs: (j['previewMs'] as num?)?.toDouble(),
       );
 }
 
@@ -133,6 +143,7 @@ class BeatmapSummary {
     required this.objectCount,
     required this.createdAt,
     required this.lanes,
+    this.origin,
   });
 
   final String id;
@@ -146,6 +157,9 @@ class BeatmapSummary {
   final DateTime createdAt;
   final int lanes;
 
+  /// "osu" for converted osu! difficulties.
+  final String? origin;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'songId': songId,
@@ -157,6 +171,7 @@ class BeatmapSummary {
         'objectCount': objectCount,
         'createdAt': createdAt.toUtc().toIso8601String(),
         'lanes': lanes,
+        if (origin != null) 'origin': origin,
       };
 
   factory BeatmapSummary.fromJson(Map<String, dynamic> j) => BeatmapSummary(
@@ -170,5 +185,6 @@ class BeatmapSummary {
         objectCount: (j['objectCount'] as num?)?.toInt() ?? 0,
         createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '')?.toLocal() ?? DateTime.now(),
         lanes: (j['lanes'] as num?)?.toInt() ?? 4,
+        origin: j['origin'] as String?,
       );
 }

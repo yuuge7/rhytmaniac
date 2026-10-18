@@ -162,6 +162,7 @@ class ImportNotifier extends Notifier<List<ImportJob>> {
 
   static String _describe(Object e) {
     if (e is DuplicateSongException) return e.toString();
+    if (e is FormatException) return e.message;
     final s = e.toString();
     if (s.contains('no audio track')) return 'This file has no audio track.';
     if (s.startsWith('Exception: ')) return s.substring(11).split('\n').first;
@@ -170,6 +171,16 @@ class ImportNotifier extends Notifier<List<ImportJob>> {
 
   Future<Song?> importPicked(PickedFile file) =>
       _run(file.name, (cb) => ref.read(servicesProvider).importer.importPicked(file, cb));
+
+  /// Imports an osu! beatmap set (.osz).
+  Future<OszImportResult?> importOsz(PickedFile file) async {
+    OszImportResult? result;
+    await _run(file.name, (cb) async {
+      result = await ref.read(servicesProvider).importer.importOsz(file, cb);
+      return result!.song;
+    });
+    return result;
+  }
 
   Future<Song?> installDemo() async {
     final song = await _run('Ember Drift', (cb) => ref.read(servicesProvider).importer.installDemo(cb));

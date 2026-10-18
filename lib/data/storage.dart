@@ -13,6 +13,7 @@ import 'package:sembast/sembast_io.dart';
 ///         cover.jpg                embedded art or a video frame
 ///         analysis.json
 ///         maps/<beatmapId>.json
+///       replays/<scoreId>.json.gz  inputs of a run, for watching it again
 ///       tmp/                       scratch for imports and exports
 class AppPaths {
   AppPaths(this.root);
@@ -22,6 +23,8 @@ class AppPaths {
   String get databaseFile => p.join(root, 'library.db');
   String get songsDir => p.join(root, 'songs');
   String get tmpDir => p.join(root, 'tmp');
+  String get replaysDir => p.join(root, 'replays');
+  String replayFile(String scoreId) => p.join(replaysDir, '$scoreId.json.gz');
 
   String songDir(String songId) => p.join(songsDir, songId);
   String analysisFile(String songId) => p.join(songDir(songId), 'analysis.json');
@@ -31,7 +34,7 @@ class AppPaths {
   String coverFile(String songId, String name) => p.join(songDir(songId), name);
 
   Future<void> ensure() async {
-    for (final d in [root, songsDir, tmpDir]) {
+    for (final d in [root, songsDir, tmpDir, replaysDir]) {
       await Directory(d).create(recursive: true);
     }
   }

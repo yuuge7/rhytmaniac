@@ -6,24 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:video_player/video_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../../audio/hit_sounds.dart';
 import '../../audio/app_audio.dart';
+import '../../audio/hit_sounds.dart';
 import '../../core/gameplay/circles_session.dart';
+import '../../core/gameplay/replay_driver.dart';
 import '../../core/gameplay/session.dart';
 import '../../core/gameplay/tiles_session.dart';
+import '../../core/generator/note_selection.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
+import '../../core/models/replay.dart';
 import '../../core/models/score.dart';
 import '../../core/models/song.dart';
+import '../../core/models/timing.dart';
 import '../../core/rating/star_rating.dart';
 import '../../core/timing/song_clock.dart';
 import '../../core/util/ids.dart';
 import '../../data/settings.dart';
 import '../../game/circles_painter.dart';
+import '../../game/fx.dart';
 import '../../game/hud.dart';
 import '../../game/tiles_painter.dart';
 import '../../state/providers.dart';
@@ -38,6 +42,7 @@ class PlayRequest {
     this.startMs,
     this.loop,
     this.saveScore = true,
+    this.replay,
   });
 
   final Song song;
@@ -51,7 +56,11 @@ class PlayRequest {
   final (double, double)? loop;
   final bool saveScore;
 
+  /// Watch this replay instead of playing.
+  final Replay? replay;
+
   bool get isPractice => loop != null;
+  bool get isReplay => replay != null;
 }
 
 enum _Phase { loading, playing, paused, countdown, failed, finished, error }
@@ -66,7 +75,9 @@ class PlayScreen extends ConsumerStatefulWidget {
 
 class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   AudioLease? _lease;
-  AudioPlayer get _player => _lease!.player;
+  MusicPlayer get _player => _lease!.player;
+  StreamSubscription<AudioSample>? _sampleSub;
+  StreamSubscription<MusicEvent>? _eventSub;
   VideoPlayerController? _video;
   HitSounds? _sfx;
   late AppSettings _settings;
@@ -74,23 +85,38 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   GameSession? _session;
   late final Ticker _ticker;
   final _frame = ValueNotifier<int>(0);
+  final _skipVisible = ValueNotifier<bool>(false);
   final _hud = HudController();
+  final _text = TextCache();
+  final _trails = TrailSet();
+  final _recorder = ReplayRecorder();
+  final List<RunSample> _timeline = [];
   _Phase _phase = _Phase.loading;
   String? _error;
   bool _audioStarted = false;
+  bool _hardSync = true;
+  bool _musicEnded = false;
   double _audioStartMs = 0;
   int _countdown = 0;
   int _loops = 0;
-  double _lastVideoSync = 0;
+  double _lastVideoSync = -1e9;
+  bool _videoSyncBusy = false;
+  double _videoSpeed = 1;
   Size _size = Size.zero;
   final Map<int, int> _pointerLane = {};
-  final List<int> _laneHolds = List.filled(6, 0);
+  final List<int> _laneHolds = List.filled(10, 0);
   double _fps = 0;
   double _drift = 0;
+
+  /// Seconds the frame rate has been too low while a video plays.
+  double _slowFor = 0;
   Duration _lastFrame = Duration.zero;
+  BeatGrid? _grid;
+  List<TimeSpan> _kiai = const [];
+  ReplayDriver? _replayDriver;
 
   PlayRequest get req => widget.request;
-  Mods get mods => req.mods;
+  Mods get mods => req.replay?.mods ?? req.mods;
   bool get _tiles => req.map.mode == GameMode.tiles;
 
   @override
@@ -109,9 +135,12 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     WidgetsBinding.instance.removeObserver(this);
     SchedulerBinding.instance.removeTimingsCallback(_onTimings);
     _ticker.dispose();
+    _sampleSub?.cancel();
+    _eventSub?.cancel();
     _lease?.release();
     _video?.dispose();
     _sfx?.dispose();
+    _text.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
     WakelockPlus.disable();
     super.dispose();
@@ -119,28 +148,53 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) _pause();
+    if (state != AppLifecycleState.resumed) {
+      _pause();
+      // Whatever the phase, nothing keeps playing behind the home screen.
+      if (_lease?.current ?? false) _player.pause();
+      _video?.pause();
+    }
   }
 
   Future<void> _load() async {
     try {
       _settings = ref.read(settingsProvider);
-      final paths = ref.read(servicesProvider).paths;
-      final source = paths.sourceFile(req.song.id, req.song.sourceFile);
-      _lease = await AppAudio.instance.open(source);
-      await _player.setSpeed(mods.rate);
+      final services = ref.read(servicesProvider);
+      final source = services.paths.sourceFile(req.song.id, req.song.sourceFile);
+      final lease = await AppAudio.instance.open(source);
+      if (!mounted) {
+        lease.release();
+        return;
+      }
+      _lease = lease;
+      await _player.setSpeed(mods.rate, pitch: mods.pitch);
       await _player.setVolume(_settings.musicVolume);
+      _sampleSub = _player.samples.listen(_onSample);
+      _eventSub = _player.events.listen(_onMusicEvent);
       if (_settings.hitSounds) {
         try {
           _sfx = await HitSounds.load(volume: _settings.hitSoundVolume);
         } catch (_) {}
       }
+      // Beat grid and kiai for the playfield pulse.
+      _grid = req.map.grid;
+      _kiai = req.map.kiai;
+      if (_grid == null || _kiai.isEmpty) {
+        try {
+          final a = await services.repo.analysis(req.song.id);
+          if (a != null) {
+            _grid ??= a.grid;
+            if (_kiai.isEmpty && req.map.origin == null) _kiai = findKiai(a);
+          }
+        } catch (_) {}
+      }
       if (req.song.hasVideo && _settings.backgroundVideo) {
         try {
-          final v = VideoPlayerController.file(File(source));
+          final v = VideoPlayerController.file(File(source), videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true));
           await v.initialize();
           await v.setVolume(0);
           await v.setPlaybackSpeed(mods.rate);
+          _videoSpeed = mods.rate;
           _video = v;
         } catch (_) {
           _video = null;
@@ -149,6 +203,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       if (!mounted) return;
       await _startRun();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _phase = _Phase.error;
         _error = 'Could not load this song: $e';
@@ -164,25 +219,33 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     );
   }
 
+  HitWindows get _windows {
+    final w = req.map.difficulty.windows;
+    final k = mods.windowFactor;
+    return HitWindows(perfect: w.perfect * k, great: w.great * k, good: w.good * k, miss: w.miss * k);
+  }
+
   void _buildSession() {
     final loop = req.loop;
     final map = loop != null ? _rangeMap(loop.$1, loop.$2) : req.map;
     final start = loop?.$1 ?? req.startMs ?? double.negativeInfinity;
-    final windows = req.map.difficulty.windows;
     final s = _tiles
-        ? TilesSession(map: map, mods: mods, windows: windows, startTimeMs: start)
-        : CirclesSession(map: map, mods: mods, windows: windows, startTimeMs: start);
+        ? TilesSession(map: map, mods: mods, windows: _windows, startTimeMs: start)
+        : CirclesSession(map: map, mods: mods, windows: _windows, startTimeMs: start);
     s.onFeedback = _onFeedback;
+    s.onEvent = _onSessionEvent;
     _session = s;
     _hud.reset();
+    _trails.clear();
+    _recorder.clear();
+    _timeline.clear();
+    final replay = req.replay;
+    _replayDriver = replay == null
+        ? null
+        : (ReplayDriver(replay.frames, s)..onPointer = (id, p, t) => _trails.add(id, p, t));
   }
 
-  double get _firstObjectMs {
-    final s = _session;
-    if (s is TilesSession) return s.notes.isEmpty ? 0 : s.notes.first.note.timeMs;
-    if (s is CirclesSession) return s.objects.isEmpty ? 0 : s.objects.first.object.timeMs;
-    return 0;
-  }
+  double get _firstObjectMs => _session?.firstObjectMs ?? 0;
 
   Future<void> _startRun() async {
     _ticker.stop();
@@ -194,11 +257,15 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (req.startMs != null || req.loop != null) _audioStartMs = math.max(0, math.min(from, first) - leadSong);
     final clockStart = math.min(_audioStartMs, first - leadSong);
     await _player.pause();
-    await _player.seek(Duration(milliseconds: _audioStartMs.round()));
+    await _player.setSpeed(mods.rate, pitch: mods.pitch);
+    await _player.setVolume(_settings.musicVolume);
+    await _player.seek(_audioStartMs);
     await _video?.pause();
     await _video?.seekTo(Duration(milliseconds: _audioStartMs.round()));
     _clock = SongClock(rate: mods.rate, offsetMs: _settings.globalOffsetMs + req.song.offsetMs)..start(clockStart);
     _audioStarted = false;
+    _musicEnded = false;
+    _hardSync = true;
     _laneHolds.fillRange(0, _laneHolds.length, 0);
     _pointerLane.clear();
     if (!mounted) return;
@@ -216,10 +283,43 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     }
   }
 
+  /// A fresh native position report: steer the song clock towards it.
+  void _onSample(AudioSample s) {
+    if (!_audioStarted || _phase != _Phase.playing || !(_lease?.current ?? false)) return;
+    if (s.positionMs < _audioStartMs + 20) return;
+    if (_hardSync) {
+      // First report after starting or resuming: lock on exactly.
+      _clock.syncAt(s.positionMs, s.wallMicros, force: true);
+      _hardSync = false;
+      return;
+    }
+    final drift = _clock.syncAt(s.positionMs, s.wallMicros);
+    _drift = _drift * 0.8 + drift.abs() * 0.2;
+  }
+
+  void _onMusicEvent(MusicEvent e) {
+    if (!(_lease?.current ?? false)) return;
+    switch (e.type) {
+      case MusicEventType.completed:
+        _musicEnded = true;
+      case MusicEventType.interrupted:
+        // Audio focus lost or the app left the foreground.
+        _pause();
+      case MusicEventType.error:
+      case MusicEventType.playing:
+        // The player stopped making sound on its own (focus loss, a call).
+        if (_audioStarted && _phase == _Phase.playing && !_player.playing && !_musicEnded) _pause();
+    }
+  }
+
   void _tick(Duration elapsed) {
     if (_lastFrame != Duration.zero) {
       final dt = (elapsed - _lastFrame).inMicroseconds / 1e6;
       if (dt > 0) _fps = _fps * 0.9 + (1 / dt) * 0.1;
+      if (_video != null && _audioStarted && _phase == _Phase.playing && dt > 0 && dt < 0.5) {
+        _slowFor = _fps < 40 ? _slowFor + dt : math.max(0, _slowFor - dt);
+        if (_slowFor > 3) _dropVideo();
+      }
     }
     _lastFrame = elapsed;
     final session = _session;
@@ -228,36 +328,96 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       final audioT = _clock.audioTimeMs;
       if (!_audioStarted && audioT >= _audioStartMs) {
         _audioStarted = true;
+        _hardSync = true;
         _player.play();
         _video?.play();
-      } else if (_audioStarted && _player.playing && _player.processingState != ProcessingState.completed) {
-        final pos = _player.position.inMicroseconds / 1000.0;
-        if (pos > _audioStartMs + 30) {
-          final drift = _clock.sync(pos);
-          _drift = _drift * 0.95 + drift.abs() * 0.05;
-        }
-        final v = _video;
-        if (v != null && audioT - _lastVideoSync > 1500 * mods.rate) {
-          _lastVideoSync = audioT;
-          final drift = v.value.position.inMilliseconds - pos;
-          if (drift.abs() > 180) v.seekTo(Duration(milliseconds: (pos + 60).round()));
-        }
+      } else if (_audioStarted) {
+        _syncVideo(audioT);
       }
       final t = _clock.timeMs;
+      _replayDriver?.advanceTo(t);
       session.update(t);
+      if (_timeline.isEmpty || t - _timeline.last.timeMs >= 250 * mods.rate) {
+        if (t >= session.firstObjectMs) _timeline.add(RunSample(t, session.processor.health, session.processor.accuracy));
+      }
       final loop = req.loop;
       if (loop != null && t > loop.$2 + 600) {
         _restartLoop();
       } else if (session.processor.failed && !req.isPractice) {
         _fail();
-      } else if ((session.complete && t > session.endTimeMs + 1400) ||
-          (_player.processingState == ProcessingState.completed && t > session.endTimeMs)) {
+      } else if ((session.complete && t > session.endTimeMs + 1400) || (_musicEnded && t > session.endTimeMs)) {
         if (!req.isPractice) _finish();
       }
+      _skipVisible.value = (_firstObjectMs - t) / mods.rate > 5000;
     }
     _hud.observe(session, _clock.timeMs);
     _frame.value++;
   }
+
+  /// The phone can't decode the video and keep the notes smooth: show the
+  /// cover instead for the rest of the run.
+  void _dropVideo() {
+    final v = _video;
+    if (v == null) return;
+    _video = null;
+    _slowFor = 0;
+    v.pause();
+    if (mounted) setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) => v.dispose());
+  }
+
+  /// Keeps the background video with the music by nudging its speed; only
+  /// big gaps are fixed with a seek, which is slow on most phones.
+  Future<void> _syncVideo(double audioT) async {
+    final v = _video;
+    if (v == null || _videoSyncBusy || audioT - _lastVideoSync < 500 * mods.rate) return;
+    _lastVideoSync = audioT;
+    _videoSyncBusy = true;
+    try {
+      final pos = await v.position;
+      if (pos == null || !mounted || _phase != _Phase.playing) return;
+      final drift = pos.inMilliseconds - _clock.audioTimeMs;
+      if (drift.abs() > 450) {
+        await v.seekTo(Duration(milliseconds: (_clock.audioTimeMs + 120 * mods.rate).round()));
+        _lastVideoSync = _clock.audioTimeMs + 1500 * mods.rate;
+        if (_videoSpeed != mods.rate) {
+          _videoSpeed = mods.rate;
+          await v.setPlaybackSpeed(_videoSpeed);
+        }
+        return;
+      }
+      final target = drift.abs() < 40 ? mods.rate : mods.rate * (1 - (drift / 1200).clamp(-0.12, 0.12));
+      if ((target - _videoSpeed).abs() > 0.004) {
+        _videoSpeed = target;
+        await v.setPlaybackSpeed(target);
+      }
+    } catch (_) {
+    } finally {
+      _videoSyncBusy = false;
+    }
+  }
+
+  /// Practice loops and Circles beat pulses read the grid.
+  double _beatPulse() {
+    final g = _grid;
+    if (g == null || _kiai.isEmpty) return 0;
+    final t = _clock.timeMs;
+    var inKiai = false;
+    for (final k in _kiai) {
+      if (t >= k.startMs && t <= k.endMs) {
+        inKiai = true;
+        break;
+      }
+    }
+    if (!inKiai) return 0;
+    final p = g.at(t);
+    final beats = (t - p.timeMs) / p.beatLengthMs;
+    final since = (beats - beats.floor()) * p.beatLengthMs;
+    final k = (1 - since / (p.beatLengthMs * 0.55)).clamp(0.0, 1.0);
+    return k * k;
+  }
+
+  bool _inBreak() => _session?.breakAt(_clock.timeMs) != null;
 
   Future<void> _restartLoop() async {
     _loops++;
@@ -265,7 +425,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     final from = req.loop!.$1;
     final start = math.max(0.0, from - 1500 * mods.rate);
     _audioStartMs = start;
-    await _player.seek(Duration(milliseconds: start.round()));
+    _hardSync = true;
+    await _player.seek(start);
     _clock.seek(start);
     await _video?.seekTo(Duration(milliseconds: start.round()));
   }
@@ -276,42 +437,80 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       return;
     }
     if (!f.isRelease) {
-      if (_settings.haptics) HapticFeedback.lightImpact();
+      if (_settings.haptics && !req.isReplay) HapticFeedback.lightImpact();
       _sfx?.hit();
+    }
+  }
+
+  void _onSessionEvent(SessionEvent e, Point2? _) {
+    switch (e) {
+      case SessionEvent.tick:
+      case SessionEvent.repeat:
+        _sfx?.tick();
+      case SessionEvent.tickMiss:
+        if (_hud.combo >= 20) _sfx?.miss();
+      case SessionEvent.spinBonus:
+        final s = _session;
+        var count = 0;
+        if (s is CirclesSession) {
+          for (final o in s.objects) {
+            if (o.object.isSpinner && o.bonusSpins > count) count = o.bonusSpins;
+          }
+        }
+        _sfx?.spin(count);
     }
   }
 
   // --- input ------------------------------------------------------------------------
 
+  bool get _acceptsInput => _phase == _Phase.playing && _size != Size.zero && !req.isReplay;
+
   void _down(PointerDownEvent e) {
-    if (_phase != _Phase.playing || _size == Size.zero) return;
+    if (!_acceptsInput) return;
     final t = _clock.timeMs;
     final s = _session;
+    s?.update(t);
     if (s is TilesSession) {
       final lane = TilesLayout(_size, s.lanes).laneAt(e.localPosition.dx);
       _pointerLane[e.pointer] = lane;
-      _laneHolds[lane]++;
+      if (_laneHolds[lane]++ == 0) _recorder.add(ReplayFrame(t, ReplayAction.press, lane));
       s.press(lane, t);
     } else if (s is CirclesSession) {
-      s.pointerDown(e.pointer, CirclesLayout(_size).toNorm(e.localPosition), t);
+      final p = CirclesLayout(_size).toNorm(e.localPosition);
+      _recorder.add(ReplayFrame(t, ReplayAction.down, e.pointer, p.x, p.y));
+      _trails.add(e.pointer, p, t);
+      s.pointerDown(e.pointer, p, t);
     }
   }
 
   void _move(PointerMoveEvent e) {
-    if (_phase != _Phase.playing) return;
+    if (!_acceptsInput) return;
     final s = _session;
-    if (s is CirclesSession) s.pointerMove(e.pointer, CirclesLayout(_size).toNorm(e.localPosition), _clock.timeMs);
+    if (s is CirclesSession) {
+      final t = _clock.timeMs;
+      s.update(t);
+      final p = CirclesLayout(_size).toNorm(e.localPosition);
+      _recorder.add(ReplayFrame(t, ReplayAction.move, e.pointer, p.x, p.y));
+      _trails.add(e.pointer, p, t);
+      s.pointerMove(e.pointer, p, t);
+    }
   }
 
   void _up(int pointer) {
     final t = _clock.timeMs;
     final s = _session;
+    if (req.isReplay) return;
+    if (_phase == _Phase.playing) s?.update(t);
     if (s is TilesSession) {
       final lane = _pointerLane.remove(pointer);
       if (lane == null) return;
       _laneHolds[lane] = math.max(0, _laneHolds[lane] - 1);
-      if (_laneHolds[lane] == 0) s.release(lane, t);
+      if (_laneHolds[lane] == 0) {
+        _recorder.add(ReplayFrame(t, ReplayAction.release, lane));
+        s.release(lane, t);
+      }
     } else if (s is CirclesSession) {
+      _recorder.add(ReplayFrame(t, ReplayAction.up, pointer));
       s.pointerUp(pointer, t);
     }
   }
@@ -321,13 +520,14 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   void _pause() {
     if (_phase != _Phase.playing && _phase != _Phase.countdown) return;
     _clock.pause();
-    _player.pause();
+    if (_lease?.current ?? false) _player.pause();
     _video?.pause();
     // Lift every finger: holds can't survive a pause.
     for (final p in _pointerLane.keys.toList()) {
       _up(p);
     }
-    setState(() => _phase = _Phase.paused);
+    _ticker.stop();
+    if (mounted) setState(() => _phase = _Phase.paused);
   }
 
   Future<void> _resume() async {
@@ -341,25 +541,37 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       await Future.delayed(const Duration(milliseconds: 550));
     }
     if (!mounted || _phase != _Phase.countdown) return;
+    _lease?.reclaim();
     if (_audioStarted) {
+      _hardSync = true;
       _player.play();
       _video?.play();
     }
     _clock.resume();
+    _lastFrame = Duration.zero;
     setState(() => _phase = _Phase.playing);
+    if (!_ticker.isActive) _ticker.start();
   }
 
   Future<void> _retry() async {
     setState(() => _phase = _Phase.loading);
-    await _player.setSpeed(mods.rate);
+    _lease?.reclaim();
     await _startRun();
+  }
+
+  Future<void> _quit() async {
+    _clock.pause();
+    if (_lease?.current ?? false) await _player.pause();
+    await _video?.pause();
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _skipIntro() async {
     final target = _firstObjectMs - 2200 * mods.rate;
     if (target <= _clock.audioTimeMs) return;
     _audioStartMs = math.max(_audioStartMs, target);
-    await _player.seek(Duration(milliseconds: target.round()));
+    _hardSync = true;
+    await _player.seek(target);
     await _video?.seekTo(Duration(milliseconds: target.round()));
     _clock.seek(target);
   }
@@ -371,11 +583,11 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     () async {
       for (var i = 1; i <= 6; i++) {
         await Future.delayed(const Duration(milliseconds: 90));
-        if (!mounted) return;
-        await _player.setSpeed(math.max(0.3, mods.rate * (1 - i * 0.12)));
+        if (!mounted || !(_lease?.current ?? false)) return;
+        await _player.setSpeed(math.max(0.3, mods.rate * (1 - i * 0.12)), pitch: math.max(0.3, 1 - i * 0.12));
         await _player.setVolume(_settings.musicVolume * (1 - i / 7));
       }
-      await _player.pause();
+      if (_lease?.current ?? false) await _player.pause();
       await _video?.pause();
     }();
     _saveScore(failed: true);
@@ -388,6 +600,17 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     final record = await _saveScore(failed: false);
     if (!mounted) return;
     final prevBest = _previousBest;
+    // The music plays on under the results, as in osu!; the results screen
+    // takes over the player and stops it when it closes.
+    final lease = _lease;
+    _lease = null;
+    // This screen is gone once the results replace it; capture what the
+    // results' buttons need now.
+    final repo = ref.read(servicesProvider).repo;
+    _sampleSub?.cancel();
+    _eventSub?.cancel();
+    await _video?.pause();
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (_) => ResultsScreen(
         result: RunResult(
@@ -398,9 +621,25 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
           stars: starRating(req.map, rate: mods.rate),
           record: record,
           previousBest: prevBest,
-          windows: req.map.difficulty.windows,
+          windows: _windows,
+          timeline: List.of(_timeline),
+          replayOf: req.replay?.player,
         ),
-        onRetry: (ctx) => Navigator.of(ctx).pushReplacement(MaterialPageRoute(builder: (_) => PlayScreen(request: req))),
+        music: lease,
+        onRetry: (ctx) => Navigator.of(ctx).pushReplacement(MaterialPageRoute(
+          builder: (_) => PlayScreen(request: req.isReplay ? PlayRequest(song: req.song, map: req.map, mods: req.mods) : req),
+        )),
+        onWatchReplay: record == null || !record.hasReplay
+            ? (req.isReplay ? (ctx) => Navigator.of(ctx).pushReplacement(MaterialPageRoute(builder: (_) => PlayScreen(request: req))) : null)
+            : (ctx) async {
+                final replay = await repo.loadReplay(record.id);
+                if (replay == null || !ctx.mounted) return;
+                Navigator.of(ctx).pushReplacement(MaterialPageRoute(
+                  builder: (_) => PlayScreen(
+                    request: PlayRequest(song: req.song, map: req.map, mods: replay.mods, replay: replay, saveScore: false),
+                  ),
+                ));
+              },
       ),
     ));
   }
@@ -409,12 +648,28 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   Future<ScoreRecord?> _saveScore({required bool failed}) async {
     final s = _session;
-    if (s == null || !req.saveScore || mods.autoplay || req.isPractice || req.startMs != null) return null;
+    if (s == null || !req.saveScore || req.isReplay || mods.autoplay || req.isPractice || req.startMs != null) return null;
     final p = s.processor;
     if (p.judged == 0) return null;
     _previousBest = ref.read(scoresProvider.notifier).best(req.map.id);
+    final id = newId();
+    var hasReplay = false;
+    if (!failed && _recorder.frames.isNotEmpty) {
+      try {
+        await ref.read(servicesProvider).repo.saveReplay(Replay(
+              scoreId: id,
+              beatmapId: req.map.id,
+              mode: req.map.mode,
+              mods: mods,
+              player: ref.read(profileProvider).name,
+              createdAt: DateTime.now(),
+              frames: List.of(_recorder.frames),
+            ));
+        hasReplay = true;
+      } catch (_) {}
+    }
     final record = ScoreRecord(
-      id: newId(),
+      id: id,
       songId: req.song.id,
       songHash: req.song.contentHash,
       beatmapId: req.map.id,
@@ -434,6 +689,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       unstableRate: p.unstableRate,
       songTitle: req.song.title,
       songArtist: req.song.artist,
+      hasReplay: hasReplay,
     );
     await ref.read(scoresProvider.notifier).add(record);
     await ref.read(libraryProvider.notifier).recordPlay(req.song.id);
@@ -444,6 +700,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
+    final padding = MediaQuery.paddingOf(context);
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -453,35 +710,70 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
         } else if (_phase == _Phase.paused) {
           _resume();
         } else {
-          Navigator.of(context).pop();
+          _quit();
         }
       },
       child: Scaffold(
         backgroundColor: Palette.inkDeep,
         body: LayoutBuilder(builder: (context, c) {
           _size = c.biggest;
+          final s = _session;
           return Stack(
             fit: StackFit.expand,
             children: [
-              _background(),
-              if (_session != null) _game(),
-              if (_session != null)
-                Hud(
-                  frame: _frame,
-                  controller: _hud,
-                  session: _session!,
-                  mode: req.map.mode,
-                  settings: _settings,
-                  time: () => _clock.timeMs,
-                  songEndMs: math.max(req.song.durationMs, _session!.endTimeMs),
-                  windows: req.map.difficulty.windows,
-                  fps: () => _fps,
-                  drift: () => _drift,
-                  frameCost: () => (_uiMs, _rasterMs),
-                  onPause: _pause,
-                  practiceLoops: req.isPractice ? _loops : null,
-                  skipIntro: _skipIntroVisible,
-                  onSkipIntro: _skipIntro,
+              RepaintBoundary(child: _background()),
+              if (s != null) _game(s),
+              if (s != null)
+                IgnorePointer(
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      size: Size.infinite,
+                      painter: HudPainter(
+                        repaint: _frame,
+                        controller: _hud,
+                        session: s,
+                        mode: req.map.mode,
+                        settings: _settings,
+                        mods: mods,
+                        time: () => _clock.timeMs,
+                        songEndMs: math.max(req.song.durationMs, s.endTimeMs),
+                        windows: _windows,
+                        padding: padding,
+                        text: _text,
+                        fps: () => _fps,
+                        drift: () => _drift,
+                        frameCost: () => (_uiMs, _rasterMs),
+                        practiceLoops: req.isPractice ? () => _loops : null,
+                        replayOf: req.replay?.player,
+                      ),
+                    ),
+                  ),
+                ),
+              if (s != null)
+                Positioned(
+                  left: 4,
+                  top: padding.top + 4,
+                  child: IconButton(
+                    tooltip: 'Pause',
+                    onPressed: _pause,
+                    icon: const Icon(Icons.pause_rounded, color: Palette.bone),
+                  ),
+                ),
+              if (s != null)
+                Positioned(
+                  right: 16,
+                  bottom: padding.bottom + (_tiles ? _size.height * 0.2 : 70),
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: _skipVisible,
+                    builder: (context, visible, _) => !visible || _phase != _Phase.playing
+                        ? const SizedBox.shrink()
+                        : FilledButton.tonalIcon(
+                            style: FilledButton.styleFrom(backgroundColor: Palette.raised, foregroundColor: Palette.bone),
+                            onPressed: _skipIntro,
+                            icon: const Icon(Icons.fast_forward_rounded),
+                            label: const Text('Skip intro'),
+                          ),
+                  ),
                 ),
               ..._overlays(),
             ],
@@ -491,9 +783,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     );
   }
 
-  bool _skipIntroVisible() =>
-      _phase == _Phase.playing && (_firstObjectMs - _clock.timeMs) / mods.rate > 5000;
-
   Widget _background() {
     final v = _video;
     final dim = _settings.backgroundDim;
@@ -502,7 +791,10 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (v != null && v.value.isInitialized) {
       bg = FittedBox(fit: BoxFit.cover, child: SizedBox(width: v.value.size.width, height: v.value.size.height, child: VideoPlayer(v)));
     } else if (cover != null && File(cover).existsSync()) {
-      bg = Image.file(File(cover), fit: BoxFit.cover);
+      // Dimmed behind the notes, so a smaller decode looks the same and
+      // keeps a wide cover from becoming a huge texture.
+      final px = (_size.height * MediaQuery.devicePixelRatioOf(context) * 0.6).round();
+      bg = Image.file(File(cover), fit: BoxFit.cover, cacheHeight: px > 0 ? px : null, gaplessPlayback: true);
     } else {
       bg = const ColoredBox(color: Palette.ink);
     }
@@ -512,8 +804,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     ]);
   }
 
-  Widget _game() {
-    final s = _session!;
+  Widget _game(GameSession s) {
     return Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: _down,
@@ -529,16 +820,25 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                   time: () => _clock.timeMs,
                   visibleSongMs: () => _settings.tilesVisibleMs(req.map.difficulty.scrollSpeed) * mods.rate,
                   hidden: mods.hidden,
+                  flashlight: mods.flashlight,
                   repaint: _frame,
+                  beatPulse: _beatPulse,
+                  inBreak: _inBreak,
                   backgroundAlpha: _video != null ? 0.55 : 0.8,
                 )
               : CirclesPainter(
                   session: s as CirclesSession,
                   time: () => _clock.timeMs,
-                  approachMs: req.map.difficulty.approachMs * mods.rate,
+                  approachMs: req.map.difficulty.approachMs * mods.rate * mods.approachFactor,
                   hidden: mods.hidden,
+                  flashlight: mods.flashlight,
                   repaint: _frame,
                   showJudgments: _settings.judgmentDisplay != JudgmentDisplay.off,
+                  trails: _trails,
+                  beatPulse: _beatPulse,
+                  inBreak: _inBreak,
+                  text: _text,
+                  pixelRatio: MediaQuery.devicePixelRatioOf(context),
                 ),
         ),
       ),
@@ -564,8 +864,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
             subtitle: '${req.song.title} · ${req.map.name}',
             actions: [
               FilledButton.icon(onPressed: _resume, icon: const Icon(Icons.play_arrow_rounded), label: const Text('Resume')),
-              OutlinedButton.icon(onPressed: _retry, icon: const Icon(Icons.replay_rounded), label: const Text('Retry')),
-              OutlinedButton.icon(onPressed: () => Navigator.of(context).pop(), icon: const Icon(Icons.close_rounded), label: const Text('Quit')),
+              OutlinedButton.icon(onPressed: _retry, icon: const Icon(Icons.replay_rounded), label: Text(req.isReplay ? 'Restart replay' : 'Retry')),
+              OutlinedButton.icon(onPressed: _quit, icon: const Icon(Icons.close_rounded), label: const Text('Quit')),
             ],
           ),
         ];
@@ -578,14 +878,20 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
           ),
         ];
       case _Phase.failed:
+        final p = _session!.processor;
+        final why = mods.perfect
+            ? 'Perfect mod: only Perfects allowed.'
+            : mods.suddenDeath
+                ? 'Sudden Death: the first miss ends the run.'
+                : 'Health ran out at ${(p.judged / math.max(1, p.totalJudgments) * 100).round()}% of the map. Turn on No-Fail to play through.';
         return [
           _Panel(
             title: 'Failed',
-            subtitle: 'Health ran out at ${(_session!.processor.judged / math.max(1, _session!.processor.totalJudgments) * 100).round()}% of the map. Turn on No-Fail to play through.',
+            subtitle: why,
             accent: Palette.danger,
             actions: [
               FilledButton.icon(onPressed: _retry, icon: const Icon(Icons.replay_rounded), label: const Text('Retry')),
-              OutlinedButton.icon(onPressed: () => Navigator.of(context).pop(), icon: const Icon(Icons.close_rounded), label: const Text('Quit')),
+              OutlinedButton.icon(onPressed: _quit, icon: const Icon(Icons.close_rounded), label: const Text('Quit')),
             ],
           ),
         ];

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'difficulty.dart';
 
 enum Judgment {
@@ -39,7 +41,7 @@ enum Grade {
   }
 }
 
-/// Gameplay modifiers chosen before a run.
+/// Gameplay modifiers chosen before a run, modelled on osu!'s.
 class Mods {
   const Mods({
     this.rate = 1.0,
@@ -47,32 +49,141 @@ class Mods {
     this.hidden = false,
     this.mirror = false,
     this.autoplay = false,
+    this.easy = false,
+    this.hardRock = false,
+    this.suddenDeath = false,
+    this.perfect = false,
+    this.flashlight = false,
+    this.nightcore = false,
   });
 
-  /// Music speed, 0.5..2.0 (pitch preserved).
+  /// Music speed, 0.5..2.0. Pitch is kept unless [nightcore] is on.
   final double rate;
   final bool noFail;
   final bool hidden;
   final bool mirror;
   final bool autoplay;
 
-  bool get isDefault => rate == 1.0 && !noFail && !hidden && !mirror && !autoplay;
+  /// Bigger circles, slower approach, wider windows, gentler health.
+  final bool easy;
 
-  Mods copyWith({double? rate, bool? noFail, bool? hidden, bool? mirror, bool? autoplay}) => Mods(
+  /// Smaller circles, faster approach, tighter windows, harsher health;
+  /// Circles are flipped top to bottom.
+  final bool hardRock;
+
+  /// The first miss fails the run.
+  final bool suddenDeath;
+
+  /// Anything less than Perfect fails the run.
+  final bool perfect;
+
+  /// Only the area around your finger (Circles) or near the hit line (Tiles)
+  /// is visible.
+  final bool flashlight;
+
+  /// The pitch rises and falls with the speed, like a tape.
+  final bool nightcore;
+
+  bool get isDefault =>
+      rate == 1.0 &&
+      !noFail &&
+      !hidden &&
+      !mirror &&
+      !autoplay &&
+      !easy &&
+      !hardRock &&
+      !suddenDeath &&
+      !perfect &&
+      !flashlight &&
+      !nightcore;
+
+  /// Pitch multiplier for the music player.
+  double get pitch => nightcore ? rate : 1.0;
+
+  /// Hit windows are multiplied by this (real milliseconds).
+  double get windowFactor => easy ? 1.4 : (hardRock ? 0.72 : 1.0);
+
+  /// Circle radius multiplier.
+  double get sizeFactor => easy ? 1.3 : (hardRock ? 0.8 : 1.0);
+
+  /// Approach time / scroll window multiplier.
+  double get approachFactor => easy ? 1.25 : (hardRock ? 0.8 : 1.0);
+
+  /// Health loss multiplier (misses and passive drain).
+  double get drainFactor => easy ? 0.5 : (hardRock ? 1.4 : 1.0);
+
+  /// Run ends on the first judgment that isn't good enough.
+  bool get failsOnMistake => suddenDeath || perfect;
+
+  /// osu!-style score multiplier.
+  double get scoreMultiplier {
+    if (autoplay) return 1.0;
+    var m = 1.0;
+    if (rate > 1.0) m *= 1 + 0.24 * (rate - 1);
+    if (rate < 1.0) m *= math.max(0.3, 1 - 1.4 * (1 - rate));
+    if (easy) m *= 0.5;
+    if (noFail) m *= 0.5;
+    if (hidden) m *= 1.06;
+    if (hardRock) m *= 1.06;
+    if (flashlight) m *= 1.12;
+    return m;
+  }
+
+  Mods copyWith({
+    double? rate,
+    bool? noFail,
+    bool? hidden,
+    bool? mirror,
+    bool? autoplay,
+    bool? easy,
+    bool? hardRock,
+    bool? suddenDeath,
+    bool? perfect,
+    bool? flashlight,
+    bool? nightcore,
+  }) =>
+      Mods(
         rate: rate ?? this.rate,
         noFail: noFail ?? this.noFail,
         hidden: hidden ?? this.hidden,
         mirror: mirror ?? this.mirror,
         autoplay: autoplay ?? this.autoplay,
+        easy: easy ?? this.easy,
+        hardRock: hardRock ?? this.hardRock,
+        suddenDeath: suddenDeath ?? this.suddenDeath,
+        perfect: perfect ?? this.perfect,
+        flashlight: flashlight ?? this.flashlight,
+        nightcore: nightcore ?? this.nightcore,
       );
 
-  /// Short labels like "1.5× · HD · NF".
+  /// Short labels like "1.5×", "Hidden", "No-Fail".
   List<String> get labels => [
         if (rate != 1.0) '${_trim(rate)}×',
+        if (nightcore) 'Nightcore',
+        if (easy) 'Easy',
+        if (hardRock) 'Hard Rock',
         if (hidden) 'Hidden',
+        if (flashlight) 'Flashlight',
         if (mirror) 'Mirror',
+        if (suddenDeath) 'Sudden Death',
+        if (perfect) 'Perfect',
         if (noFail) 'No-Fail',
         if (autoplay) 'Auto',
+      ];
+
+  /// Two-letter osu!-style acronyms for tight spaces.
+  List<String> get acronyms => [
+        if (rate > 1.0) nightcore ? 'NC' : 'DT',
+        if (rate < 1.0) 'HT',
+        if (easy) 'EZ',
+        if (hardRock) 'HR',
+        if (hidden) 'HD',
+        if (flashlight) 'FL',
+        if (mirror) 'MR',
+        if (suddenDeath) 'SD',
+        if (perfect) 'PF',
+        if (noFail) 'NF',
+        if (autoplay) 'AT',
       ];
 
   static String _trim(double v) {
@@ -86,17 +197,31 @@ class Mods {
         'hidden': hidden,
         'mirror': mirror,
         'autoplay': autoplay,
+        if (easy) 'easy': true,
+        if (hardRock) 'hardRock': true,
+        if (suddenDeath) 'suddenDeath': true,
+        if (perfect) 'perfect': true,
+        if (flashlight) 'flashlight': true,
+        if (nightcore) 'nightcore': true,
       };
 
-  factory Mods.fromJson(Map<String, dynamic>? j) => j == null
-      ? const Mods()
-      : Mods(
-          rate: (j['rate'] as num?)?.toDouble() ?? 1.0,
-          noFail: j['noFail'] as bool? ?? false,
-          hidden: j['hidden'] as bool? ?? false,
-          mirror: j['mirror'] as bool? ?? false,
-          autoplay: j['autoplay'] as bool? ?? false,
-        );
+  factory Mods.fromJson(Map<String, dynamic>? j) {
+    if (j == null) return const Mods();
+    bool b(String k) => j[k] as bool? ?? false;
+    return Mods(
+      rate: (j['rate'] as num?)?.toDouble() ?? 1.0,
+      noFail: b('noFail'),
+      hidden: b('hidden'),
+      mirror: b('mirror'),
+      autoplay: b('autoplay'),
+      easy: b('easy'),
+      hardRock: b('hardRock'),
+      suddenDeath: b('suddenDeath'),
+      perfect: b('perfect'),
+      flashlight: b('flashlight'),
+      nightcore: b('nightcore'),
+    );
+  }
 }
 
 /// A finished (or failed) run, as stored in the scores database.
@@ -123,8 +248,12 @@ class ScoreRecord {
     this.songTitle = '',
     this.songArtist = '',
     this.practice = false,
-    this.formatVersion = 1,
+    this.hasReplay = false,
+    this.formatVersion = currentFormatVersion,
   });
+
+  /// 2: osu!-style mods, mod score multipliers, replays.
+  static const currentFormatVersion = 2;
 
   final int formatVersion;
   final String id;
@@ -156,6 +285,9 @@ class ScoreRecord {
   final String songArtist;
   final bool practice;
 
+  /// A replay file was saved next to the scores (`replays/<id>.json.gz`).
+  final bool hasReplay;
+
   int count(Judgment j) => counts[j] ?? 0;
 
   bool get fullCombo => count(Judgment.miss) == 0 && !failed;
@@ -166,7 +298,9 @@ class ScoreRecord {
     final accFactor = accuracy * accuracy * accuracy * accuracy;
     final fc = fullCombo ? 1.08 : 1.0;
     final nf = mods.noFail ? 0.9 : 1.0;
-    return 10 * stars * stars * accFactor * fc * nf;
+    final ez = mods.easy ? 0.5 : 1.0;
+    final bonus = (mods.hidden ? 1.04 : 1.0) * (mods.hardRock ? 1.06 : 1.0) * (mods.flashlight ? 1.1 : 1.0);
+    return 10 * stars * stars * accFactor * fc * nf * ez * bonus;
   }
 
   Map<String, dynamic> toJson() => {
@@ -192,6 +326,7 @@ class ScoreRecord {
         'songTitle': songTitle,
         'songArtist': songArtist,
         'practice': practice,
+        if (hasReplay) 'hasReplay': true,
       };
 
   factory ScoreRecord.fromJson(Map<String, dynamic> j) {
@@ -219,6 +354,7 @@ class ScoreRecord {
       songTitle: j['songTitle'] as String? ?? '',
       songArtist: j['songArtist'] as String? ?? '',
       practice: j['practice'] as bool? ?? false,
+      hasReplay: j['hasReplay'] as bool? ?? false,
     );
   }
 }

@@ -62,15 +62,26 @@ builds playable maps from about 1★ to 5★+, for two game modes.
 - Import video or audio through the system file picker. Title, artist and cover art
   (embedded art or a frame from the video) are read automatically and can be edited.
 - Audio is decoded on-device and analyzed in the background: onsets, tempo and beat
-  grid, downbeats, loudness, sustained notes and quiet breaks.
-- A beat-analysis view shows the waveform, beat grid and detected onsets, with
-  playback, so you can check what the app heard.
+  grid (including tempo changes and triplet or swing parts), downbeats, loudness,
+  sustained notes, quiet breaks and loud "kiai" sections.
+- A beat-analysis view shows the waveform, beat grid, tempo sections and detected
+  onsets, with playback, so you can check what the app heard.
+
+**Play osu! beatmaps**
+- Import an osu! beatmap set (`.osz`): osu!standard difficulties become Circles maps
+  (sliders of every curve type, repeats, ticks, slider velocity, spinners, combo
+  colours, kiai), osu!mania difficulties (1K–10K, holds) become Tiles maps. Circle
+  size, approach rate, timing windows and HP carry over; the background becomes the
+  cover. The song also gets Rhytmaniac's own generated difficulties.
+- The landscape osu! playfield is turned a quarter turn to fill the portrait screen,
+  which keeps every pattern's shape and spacing.
 
 **Two game modes, generated for every song**
 - **Tiles**: 3–6 lanes, taps and holds (release timing counts). Lanes follow pitch;
   chords, trills and jacks scale with difficulty.
-- **Circles**: hit circles with approach rings, sliders and spinners in a tall
-  portrait playfield, with flowing patterns and combo colours.
+- **Circles**: hit circles with approach rings, follow points, sliders with ticks and
+  reverse arrows, and spinners (with RPM and bonus spins) in a tall portrait
+  playfield, with flowing patterns, combo colours, hit lighting and a touch trail.
 - Easy → Expert presets, a **Target ★** mode that searches for a map near the rating
   you ask for, and a **Custom** mode with every knob: density, snap, hit window,
   scroll speed / approach time, lanes / circle size, chords, jacks, spacing, holds,
@@ -79,21 +90,28 @@ builds playable maps from about 1★ to 5★+, for two game modes.
   with playback speed.
 
 **Play**
-- The audio clock drives timing; per-song and global offsets, plus a tap-along
-  calibration screen.
-- Mods: speed 0.5×–2.0× (pitch preserved), No-Fail, Hidden, Mirror, Autoplay.
-- Health, combo, accuracy, grades SS–D, hit sounds, haptics, optional background
-  video, pause with countdown.
-- Results with judgment breakdown and an early/late hit-error histogram that can
-  correct the song's offset for you.
+- The audio output drives timing: the game clock follows the real playback position
+  of the music; per-song and global offsets, plus a tap-along calibration screen.
+- osu!-style mods with score multipliers: Easy, No-Fail, Half Time / Double Time (any
+  speed 0.5×–2.0×), Nightcore, Hard Rock, Hidden, Flashlight, Sudden Death, Perfect,
+  Mirror and Autoplay.
+- Health with passive drain (each map's HP setting), combo, accuracy, grades SS–D,
+  break banners, kiai pulses on the beat, hit sounds, haptics, optional background
+  video, pause with countdown. Music pauses whenever the app leaves the screen.
+- Results with judgment breakdown, a health and accuracy graph, slider ticks and
+  spinner bonus, and an early/late hit-error histogram that can correct the song's
+  offset for you.
+- Replays: every finished run is recorded; watch it from the results or from the
+  local ranking of each difficulty.
 - Practice mode loops any section, slowed down if you like.
 
 **Make it yours**
 - Editor: zoomable timeline with waveform and beat grid, snap divisors, slowed
   playback, place/drag/delete notes, draw holds and sliders, undo/redo, regenerate a
   section, test-play from any point. Edits are saved as separate difficulties.
-- Library sorting and search, local high scores per difficulty, a profile with your
-  Pulse rating, best plays, most played songs and accuracy trend.
+- Library sorting and search, a local ranking per difficulty, song previews on the
+  song page, and a profile with your Pulse rating, best plays, most played songs and
+  accuracy trend.
 - Share songs as zip packs; move your whole profile (scores, settings, optionally
   your library) to another device. Exports go to `Download/Rhytmaniac` or any folder
   you choose.
@@ -127,10 +145,16 @@ Android 7.0 or newer.
                          strain-based star rating
 ```
 
-- **Timing**: the music player's position is the master clock. A stopwatch
-  extrapolates between position reports, each report nudges the clock back, and
-  large jumps snap. Judgments use real milliseconds, so speed mods keep the windows
-  fair.
+- **Timing**: the music plays through one ExoPlayer instance in a small Kotlin
+  bridge. The game polls its output position (derived from AudioTrack timestamps)
+  about ten times a second and dates each report at the middle of the round trip; a
+  monotonic clock extrapolates between reports, each report nudges it back, and large
+  jumps snap. Audio stalls or speed changes therefore can't make notes drift from the
+  music. Judgments use real milliseconds, so speed mods keep the windows fair.
+- **Tempo sections**: 12 s windows each get a local tempo; two agreeing windows away
+  from the current tempo start a new section, whose boundary is then moved to where
+  the old grid stops and the new one starts explaining the onsets. Off-beat onsets
+  vote window by window for a 1/4 or 1/3 grid to find triplet and swing parts.
 - **Generation** is deterministic per seed and only reads the cached analysis, so a
   new difficulty takes well under a second.
 - **Star rating** collects decaying per-object strain (Tiles: per-lane, overall and
@@ -146,7 +170,7 @@ Android 7.0 or newer.
 | Rendering | `CustomPainter` + `Ticker` | Two 2D playfields don't need a game engine; raw pointer events give lag-free multi-touch. |
 | Audio decoding | Android `MediaExtractor` / `MediaCodec` (Kotlin) | Built in and hardware-accelerated; no 30–60 MB ffmpeg build or licence baggage. |
 | Analysis | Pure Dart + [`fftea`](https://pub.dev/packages/fftea), run in an isolate | Testable on the desktop, never blocks the UI. |
-| Music / effects | [`just_audio`](https://pub.dev/packages/just_audio) / [`audioplayers`](https://pub.dev/packages/audioplayers) (SoundPool) | Pitch-preserving speed; low-latency hit sounds that never steal audio focus. |
+| Music / effects | ExoPlayer ([`media3`](https://developer.android.com/media/media3)) and SoundPool, behind a small Kotlin bridge (`GameAudio.kt`) | Real output position for the game clock, pitch-preserving or Nightcore speed, music that pauses with the app; low-latency hit sounds that never steal audio focus. |
 | Storage | [`sembast`](https://pub.dev/packages/sembast) + JSON files per song | No code generation; records match the export formats. |
 | State | [`flutter_riverpod`](https://pub.dev/packages/flutter_riverpod) | Simple dependency injection and testable notifiers. |
 | Sharing | [`archive`](https://pub.dev/packages/archive), Storage Access Framework, MediaStore | Zip packs saved to Downloads or any folder. |
@@ -201,6 +225,7 @@ lib/
 ├── core/                 Pure Dart (no Flutter): runs in isolates and unit tests
 │   ├── analysis/         STFT, spectral flux, peak picking, tempo and beat grid
 │   ├── generator/        Note selection, Tiles lanes, Circles placement
+│   ├── import/           osu! beatmap parser and converter
 │   ├── rating/           Strain-based star rating
 │   ├── scoring/          Judgments, score, accuracy, health
 │   ├── gameplay/         Tiles and Circles rules, autoplay
@@ -208,11 +233,12 @@ lib/
 │   └── models/           Versioned JSON models
 ├── data/                 Library database, song folders, import pipeline, zip packs
 ├── platform/             Dart side of the Android bridge
-├── audio/                Shared music player, hit sounds
-├── game/                 Gameplay renderers and HUD
+├── audio/                Dart side of the native music player, hit sounds
+├── game/                 Gameplay renderers, HUD and effects
 └── ui/                   Screens, editor, theme (design tokens in theme.dart)
 android/app/src/main/kotlin/…/
 ├── MainActivity.kt       File picking and saving (SAF, MediaStore)
+├── GameAudio.kt          Music (ExoPlayer) and hit sounds (SoundPool)
 └── MediaTools.kt         MediaCodec decoding, tags and cover extraction
 test/                     core/ (logic), data/ (database and packs)
 tool/                     Asset synthesizer and icon generator
@@ -329,11 +355,12 @@ All files are JSON with a `formatVersion` field; readers stay backward compatibl
 
 | File | Contents |
 |---|---|
-| `analysis.json` | `bpm`, `beatOffsetMs`, `beatLengthMs`, `barOffsetBeats`, onsets (`timeMs`, `strength`, `low`/`mid`/`high`), energy curves, sustains, waveform peaks |
-| `beatmap.json` | `mode`, metadata, difficulty parameters, `seed`, `starRating`, `edited`, `objects` |
+| `analysis.json` (v2) | `bpm`, `beatOffsetMs`, `beatLengthMs`, `barOffsetBeats`, `timingPoints`? (`timeMs`, `beatLengthMs`, `meter`, `barOffsetBeats`, `triplet`), onsets (`timeMs`, `strength`, `low`/`mid`/`high`), energy curves, sustains, waveform peaks |
+| `beatmap.json` (v2) | `mode`, metadata, difficulty parameters (incl. `hpDrain`), `seed`, `starRating`, `edited`, `timing`?, `kiai`? (`[start, end]` pairs), `origin`? (`"osu"`), `objects` |
 | Tiles object | `{ "type": "tap" \| "hold", "timeMs", "lane", "endTimeMs"? }` |
-| Circles object | `{ "type": "circle" \| "slider" \| "spinner", "timeMs", "x", "y", "comboIndex", "path"?, "endTimeMs"? }` — coordinates normalized to 0–1 on a fixed-aspect playfield |
-| Score | judgments, accuracy, score, max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash |
+| Circles object | `{ "type": "circle" \| "slider" \| "spinner", "timeMs", "x", "y", "comboIndex", "path"?, "curve"? (`"linear"` for sampled paths), "repeats"?, "tickMs"?, "endTimeMs"? }` — coordinates normalized to 0–1 on a fixed-aspect playfield |
+| Score (v2) | judgments, accuracy, score, max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash, `hasReplay` |
+| Replay `replays/<scoreId>.json.gz` | `scoreId`, `beatmapId`, `mode`, `mods`, `player`, `frames` (flat `[timeMs, action, pointer or lane, x, y, …]`) |
 | Song pack `*.rhpack.zip` | `manifest.json` + `songs/<id>/{source.*, cover.jpg, analysis.json, maps/*.json}` |
 | Profile `*.rhprofile.zip` | `manifest.json` + `profile.json` (player, settings, scores, play stats), optionally the full library; scores re-link to songs by audio hash |
 
@@ -356,14 +383,14 @@ Guidelines:
 
 ## Known limitations
 
-- One tempo per song; tempo changes and swing or triplet grids aren't detected yet.
-- Onset detection is heuristic. Dense, heavily compressed songs can produce busy
-  low difficulties — tune them with Custom or fix them in the editor.
-- Android only for now; iOS needs a native port of the decoding and file bridge.
-- Background video is resynced periodically and may trail slightly on slow
-  devices; audio and notes are unaffected.
-- On Android 9 and older, exports use the system save dialog instead of writing to
-  Downloads directly.
+- Tempo detection handles up to eight steady tempo sections and triplet or swing
+  parts; music that speeds up and slows down freely (rubato, live recordings
+  without a click) is followed only approximately.
+- Onset detection is heuristic; tune generated maps with Custom or the editor.
+- osu! imports: osu!taiko and osu!catch difficulties are skipped; storyboards,
+  custom hit sounds and skins aren't used; the playfield is rotated to portrait.
+- Android only for now; iOS needs a native port of the decoding, file and audio
+  bridges.
 
 ## License and credits
 

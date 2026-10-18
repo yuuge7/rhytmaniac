@@ -6,6 +6,7 @@ import 'package:fftea/fftea.dart';
 import '../models/analysis.dart';
 import 'dsp.dart';
 import 'tempo.dart';
+import 'tempo_map.dart';
 
 /// Parameters for [analyzePcm]. Defaults suit 22.05 kHz mono input.
 class AnalyzerConfig {
@@ -158,6 +159,32 @@ SongAnalysis analyzePcm(
     lowEnvelope[f] = nLow[f];
   }
   final tempo = estimateTempo(odf, frameMs: frameMs, lowEnvelope: lowEnvelope);
+  onProgress?.call(0.8);
+  // Tempo changes and triplet parts. Empty for a straight single tempo.
+  final sections = detectTimingSections(
+    odf: odf,
+    frameMs: frameMs,
+    global: tempo,
+    onsets: onsets,
+    durationMs: durationMs,
+    lowEnvelope: lowEnvelope,
+  );
+  var bpm = tempo.bpm, beatOffset = tempo.offsetMs, barOffset = tempo.barOffsetBeats;
+  if (sections.length > 1) {
+    // Summary values describe the longest section.
+    var longest = 0, longestMs = -1.0;
+    for (var i = 0; i < sections.length; i++) {
+      final end = i + 1 < sections.length ? sections[i + 1].timeMs : durationMs;
+      if (end - sections[i].timeMs > longestMs) {
+        longestMs = end - sections[i].timeMs;
+        longest = i;
+      }
+    }
+    final s = sections[longest];
+    bpm = s.bpm;
+    beatOffset = s.timeMs % s.beatLengthMs;
+    barOffset = ((s.barOffsetBeats - (s.timeMs / s.beatLengthMs).floor()) % 4 + 4) % 4;
+  }
   onProgress?.call(0.85);
 
   // --- Energy curves ----------------------------------------------------------
@@ -194,10 +221,11 @@ SongAnalysis analyzePcm(
     sampleRate: sampleRate,
     hopSize: hop,
     durationMs: durationMs,
-    bpm: tempo.bpm,
-    beatOffsetMs: tempo.offsetMs,
+    bpm: bpm,
+    beatOffsetMs: beatOffset,
     tempoConfidence: tempo.confidence,
-    barOffsetBeats: tempo.barOffsetBeats,
+    barOffsetBeats: barOffset,
+    timingPoints: sections,
     onsets: onsets,
     energyResolutionMs: config.energyResolutionMs,
     energy: energy,

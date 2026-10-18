@@ -110,8 +110,9 @@ class NativeBridge {
     }
   }
 
-  /// Saves into Download/Rhytmaniac. Throws [PlatformException] with message
-  /// `needs_saf` on Android 9 and older.
+  /// Saves into Download/Rhytmaniac. On Android 9 and older this asks for
+  /// storage access first; if it's refused, throws [PlatformException] with
+  /// message `needs_saf` so the caller can use the system save dialog.
   Future<String> saveToDownloads(String sourcePath, String name, String mime) async =>
       (await _channel.invokeMethod<String>('saveToDownloads', {'source': sourcePath, 'name': name, 'mime': mime}))!;
 

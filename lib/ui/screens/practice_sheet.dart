@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/models/analysis.dart';
+import '../../core/models/timing.dart';
 import '../../core/models/song.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
@@ -42,9 +43,18 @@ class _PracticeSheetState extends State<PracticeSheet> {
   double _snap(double ms) {
     final a = widget.analysis;
     if (a == null) return ms;
-    final bar = a.beatLengthMs * 4;
-    final first = a.firstDownbeatMs;
-    return (first + ((ms - first) / bar).round() * bar).clamp(0.0, _duration);
+    final grid = a.grid;
+    final bar = grid.beatLengthAt(ms) * 4;
+    var best = ms, bestD = double.infinity;
+    for (final l in grid.lines(math.max(0.0, ms - bar), ms + bar, 1)) {
+      if (l.kind != GridLineKind.downbeat) continue;
+      final d = (l.timeMs - ms).abs();
+      if (d < bestD) {
+        bestD = d;
+        best = l.timeMs;
+      }
+    }
+    return best.clamp(0.0, _duration);
   }
 
   @override

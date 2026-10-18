@@ -4,18 +4,31 @@ import '../geometry/slider_curve.dart';
 import '../models/beatmap.dart';
 import '../models/difficulty.dart';
 import '../models/score.dart';
+import '../models/timing.dart';
 import '../scoring/score_processor.dart';
 import 'session.dart';
 
 class CircleObjectState {
   CircleObjectState(this.object, this.comboNumber)
-      : curve = object.isSlider && object.path != null ? SliderCurve(object.path!) : null;
+      : curve = SliderCurve.of(object),
+        ticks = object.tickTimes(),
+        repeatTimes = object.repeatTimes() {
+    tickHit = List<bool?>.filled(ticks.length, null);
+  }
 
   final CircleObject object;
 
   /// 1-based number shown inside the circle.
   final int comboNumber;
   final SliderCurve? curve;
+
+  /// Slider tick and repeat times (song ms), and how each went.
+  final List<double> ticks;
+  late final List<bool?> tickHit;
+  final List<double> repeatTimes;
+  int nextTick = 0;
+  int nextRepeat = 0;
+
   Judgment? head;
   Judgment? tail;
 
@@ -24,8 +37,11 @@ class CircleObjectState {
   double trackedMs = 0;
   bool following = false;
 
-  /// Spinner: accumulated rotation in radians.
+  /// Spinner: accumulated rotation in radians, rotations past the required
+  /// count, and a smoothed spin speed.
   double spun = 0;
+  int bonusSpins = 0;
+  double rpm = 0;
 
   /// Song time the head was hit (for fade-out animation).
   double? hitAt;
@@ -36,12 +52,23 @@ class CircleObjectState {
     return head != null;
   }
 
+  /// Progress along the path (0..1) at song time [t], turning back at
+  /// every repeat.
+  double pathProgress(double t) {
+    final o = object;
+    if (o.endTimeMs == null || o.endTimeMs! <= o.timeMs) return 0;
+    final passes = o.repeats + 1;
+    final x = ((t - o.timeMs) / (o.endTimeMs! - o.timeMs)).clamp(0.0, 1.0) * passes;
+    final pass = math.min(passes - 1, x.floor());
+    final f = x - pass;
+    return pass.isOdd ? 1 - f : f;
+  }
+
   /// Ball position at song time [t], normalized.
   Point2 ballAt(double t) {
-    final o = object;
-    if (curve == null || o.endTimeMs == null) return Point2(o.x, o.y);
-    final p = ((t - o.timeMs) / (o.endTimeMs! - o.timeMs)).clamp(0.0, 1.0);
-    return curve!.at(p);
+    final c = curve;
+    if (c == null || object.endTimeMs == null) return Point2(object.x, object.y);
+    return c.at(pathProgress(t));
   }
 }
 
@@ -55,14 +82,16 @@ class _Pointer {
 class CirclesSession extends GameSession {
   CirclesSession({
     required Beatmap map,
-    required this.mods,
+    required super.mods,
     required this.windows,
     double startTimeMs = double.negativeInfinity,
-  }) : radius = map.difficulty.circleRadius {
+  })  : radius = map.difficulty.circleRadius * mods.sizeFactor,
+        super(hpDrain: map.difficulty.hpDrain) {
     var number = 0;
     int? lastCombo;
     for (final raw in map.circleObjects) {
-      final o = mods.mirror ? raw.mirrored() : raw;
+      var o = mods.mirror ? raw.mirrored() : raw;
+      if (mods.hardRock) o = o.flipped();
       if (o.comboIndex != lastCombo) {
         number = 0;
         lastCombo = o.comboIndex;
@@ -73,10 +102,16 @@ class CirclesSession extends GameSession {
     }
     _judge = Judge(windows);
     final total = objects.fold(0, (s, o) => s + (o.object.isSlider ? 2 : 1));
-    processor = ScoreProcessor(totalJudgments: total, noFail: mods.noFail);
+    final ticks = objects.fold(0, (s, o) => s + o.ticks.length + o.repeatTimes.length);
+    processor = GameSession.processorFor(judgments: total, ticks: ticks, hp: hpDrain, mods: mods);
+    var end = 0.0;
+    for (final o in objects) {
+      if (o.object.endMs > end) end = o.object.endMs;
+    }
+    _endTimeMs = end;
+    breaks = findMapBreaks(objects.map((o) => (o.object.timeMs, o.object.endMs)), mods.rate);
   }
 
-  final Mods mods;
   final HitWindows windows;
 
   /// Circle radius as a fraction of playfield width.
@@ -88,6 +123,9 @@ class CirclesSession extends GameSession {
   final Map<int, _Pointer> _pointers = {};
   @override
   final List<HitFeedback> feedback = [];
+  @override
+  late final List<TimeSpan> breaks;
+  late final double _endTimeMs;
   int _firstActive = 0;
 
   /// Autoplay cursor position, for drawing.
@@ -97,7 +135,10 @@ class CirclesSession extends GameSession {
   double get followRadius => radius * 2.4;
 
   @override
-  double get endTimeMs => objects.isEmpty ? 0 : objects.map((o) => o.object.endMs).reduce(math.max);
+  double get firstObjectMs => objects.isEmpty ? 0 : objects.first.object.timeMs;
+
+  @override
+  double get endTimeMs => _endTimeMs;
 
   Iterable<Point2> get pointerPositions => _pointers.values.map((p) => p.pos);
 
@@ -130,6 +171,8 @@ class CirclesSession extends GameSession {
     _pointers.remove(id);
   }
 
+  double _lastSpinAt = double.nan;
+
   void _spin(_Pointer p, double timeMs) {
     for (var i = _firstActive; i < objects.length; i++) {
       final s = objects[i];
@@ -147,12 +190,33 @@ class CirclesSession extends GameSession {
         while (d < -math.pi) {
           d += 2 * math.pi;
         }
-        s.spun += d.abs();
+        _addSpin(s, d.abs(), timeMs);
       }
       p.lastAngle = angle;
       return;
     }
     p.lastAngle = null;
+  }
+
+  void _addSpin(CircleObjectState s, double radians, double timeMs) {
+    final before = s.spun;
+    s.spun += radians;
+    final dt = _lastSpinAt.isNaN ? 0.0 : realMs(timeMs - _lastSpinAt, _rate);
+    _lastSpinAt = timeMs;
+    if (dt > 0 && dt < 250) {
+      final rpm = radians / (2 * math.pi) / (dt / 60000);
+      final k = math.min(1.0, dt / 300);
+      s.rpm = s.rpm + (math.min(rpm, 600) - s.rpm) * k;
+    }
+    // Every full turn past the requirement is a bonus spin.
+    final need = requiredSpins(s) * 2 * math.pi;
+    final bonusBefore = math.max(0, ((before - need) / (2 * math.pi)).floor());
+    final bonusNow = math.max(0, ((s.spun - need) / (2 * math.pi)).floor());
+    if (bonusNow > bonusBefore) {
+      s.bonusSpins = bonusNow;
+      processor.bonus += 1000 * (bonusNow - bonusBefore);
+      onEvent?.call(SessionEvent.spinBonus, null);
+    }
   }
 
   /// Rotations a spinner needs: 1.25 per real second, at least one.
@@ -178,10 +242,14 @@ class CirclesSession extends GameSession {
     onFeedback?.call(f);
   }
 
+  bool _followed(Point2 ball) =>
+      mods.autoplay || _pointers.values.any((p) => playfieldDistance(p.pos, ball) <= followRadius);
+
   double _lastUpdate = double.negativeInfinity;
 
   @override
   void update(double timeMs) {
+    applyDrain(timeMs);
     final dt = _lastUpdate.isFinite ? math.max(0.0, timeMs - _lastUpdate) : 0.0;
     _lastUpdate = timeMs;
     final goodSong = windows.good * _rate;
@@ -196,7 +264,9 @@ class CirclesSession extends GameSession {
       if (s.done) continue;
 
       if (o.isSpinner) {
-        if (mods.autoplay && timeMs >= o.timeMs) s.spun += realMs(dt, _rate) / 1000 * 2 * math.pi * 2.5;
+        if (mods.autoplay && timeMs >= o.timeMs && timeMs <= o.endMs) {
+          _addSpin(s, realMs(dt, _rate) / 1000 * 2 * math.pi * 2.5, timeMs);
+        }
         if (timeMs >= o.endMs) {
           final ratio = s.spun / (2 * math.pi) / requiredSpins(s);
           final j = ratio >= 1
@@ -220,17 +290,31 @@ class CirclesSession extends GameSession {
         }
       }
 
-      if (o.isSlider && s.head != null && s.tail == null) {
-        if (timeMs >= o.timeMs) {
-          final ball = s.ballAt(timeMs);
-          final followed = mods.autoplay ||
-              _pointers.values.any((p) => playfieldDistance(p.pos, ball) <= followRadius);
+      if (o.isSlider && s.tail == null && timeMs >= o.timeMs) {
+        // Ticks and repeats: the ball must be followed as it passes them.
+        while (s.nextTick < s.ticks.length && s.ticks[s.nextTick] <= timeMs) {
+          final at = s.ticks[s.nextTick];
+          final hit = _followed(s.ballAt(at));
+          s.tickHit[s.nextTick] = hit;
+          s.nextTick++;
+          processor.applyTick(hit);
+          onEvent?.call(hit ? SessionEvent.tick : SessionEvent.tickMiss, s.ballAt(at));
+        }
+        while (s.nextRepeat < s.repeatTimes.length && s.repeatTimes[s.nextRepeat] <= timeMs) {
+          final at = s.repeatTimes[s.nextRepeat];
+          final hit = _followed(s.ballAt(at));
+          s.nextRepeat++;
+          processor.applyTick(hit);
+          onEvent?.call(hit ? SessionEvent.repeat : SessionEvent.tickMiss, s.ballAt(at));
+        }
+        if (s.head != null) {
+          final followed = _followed(s.ballAt(timeMs));
           s.following = followed;
           final step = math.min(dt, timeMs - o.timeMs);
           s.trackedMs += step;
           if (followed) s.followedMs += step;
         }
-        if (timeMs >= o.endMs) {
+        if (timeMs >= o.endMs && s.head != null) {
           final total = math.max(1.0, s.trackedMs);
           final f = s.followedMs / total;
           final j = f >= 0.9

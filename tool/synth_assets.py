@@ -220,6 +220,14 @@ def tick(freq, length, decay, noise=0.0):
     return s * 0.8
 
 
+def chime(freq, length, decay):
+    n = int(length * SR)
+    t = np.arange(n) / SR
+    s = sum(np.sin(2 * np.pi * freq * k * t) / k for k in (1, 2, 3)) * np.exp(-t * decay)
+    s /= np.max(np.abs(s)) + 1e-9
+    return s * 0.7
+
+
 def write_wav(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     pcm = (np.clip(data, -1, 1) * 32767).astype("<i2")
@@ -231,8 +239,27 @@ def write_wav(path, data):
     print(f"wrote {path} ({len(pcm) / SR:.1f}s)")
 
 
+def write_effects(only_missing=False):
+    effects = [
+        ("hit", lambda: tick(1800, 0.06, 70, noise=0.25)),
+        ("hit_soft", lambda: tick(900, 0.08, 50, noise=0.1)),
+        ("miss", lambda: tick(220, 0.12, 30)),
+        ("tick", lambda: tick(2600, 0.035, 120, noise=0.15)),
+        ("spin", lambda: chime(1320, 0.18, 22)),
+    ]
+    for name, make in effects:
+        path = ROOT / f"assets/sfx/{name}.wav"
+        data = make()  # always drawn, so the noise sequence stays the same
+        if not (only_missing and path.exists()):
+            write_wav(path, data)
+
+
 if __name__ == "__main__":
-    write_wav(ROOT / "assets/audio/ember_drift.wav", build_song())
-    write_wav(ROOT / "assets/sfx/hit.wav", tick(1800, 0.06, 70, noise=0.25))
-    write_wav(ROOT / "assets/sfx/hit_soft.wav", tick(900, 0.08, 50, noise=0.1))
-    write_wav(ROOT / "assets/sfx/miss.wav", tick(220, 0.12, 30))
+    import sys
+
+    # `python tool/synth_assets.py sfx` only adds sound effects that are missing
+    # (the noise differs from a full run, which also synthesizes the song).
+    sfx_only = sys.argv[1:] == ["sfx"]
+    if not sfx_only:
+        write_wav(ROOT / "assets/audio/ember_drift.wav", build_song())
+    write_effects(only_missing=sfx_only)

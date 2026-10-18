@@ -41,7 +41,7 @@ void main() {
     expect(back.score, r.score);
     expect(back.count(Judgment.great), 15);
     expect(back.grade, r.grade);
-    expect(back.formatVersion, 1);
+    expect(back.formatVersion, ScoreRecord.currentFormatVersion);
   });
 
   test('song json round trip keeps fingerprint and offset', () {

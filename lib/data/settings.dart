@@ -25,6 +25,7 @@ class AppSettings {
     this.exportFolderUri,
     this.exportFolderName,
     this.demoInstalled = false,
+    this.previewMusic = true,
   });
 
   /// Audio latency compensation in ms (positive: sound reaches you late).
@@ -49,6 +50,9 @@ class AppSettings {
   final String? exportFolderName;
   final bool demoInstalled;
 
+  /// Play the song (from its preview point) on the song screen.
+  final bool previewMusic;
+
   /// Visible time window (real ms) of the Tiles lane for a map's speed.
   double tilesVisibleMs(double mapScrollSpeed) => 2600 / (mapScrollSpeed * scrollSpeed).clamp(0.4, 12.0);
 
@@ -69,6 +73,7 @@ class AppSettings {
     String? exportFolderName,
     bool clearExportFolder = false,
     bool? demoInstalled,
+    bool? previewMusic,
   }) =>
       AppSettings(
         globalOffsetMs: globalOffsetMs ?? this.globalOffsetMs,
@@ -86,6 +91,7 @@ class AppSettings {
         exportFolderUri: clearExportFolder ? null : (exportFolderUri ?? this.exportFolderUri),
         exportFolderName: clearExportFolder ? null : (exportFolderName ?? this.exportFolderName),
         demoInstalled: demoInstalled ?? this.demoInstalled,
+        previewMusic: previewMusic ?? this.previewMusic,
       );
 
   Map<String, dynamic> toJson() => {
@@ -105,6 +111,7 @@ class AppSettings {
         'exportFolderUri': exportFolderUri,
         'exportFolderName': exportFolderName,
         'demoInstalled': demoInstalled,
+        'previewMusic': previewMusic,
       };
 
   /// Settings that travel with a profile export (device-specific ones don't).
@@ -133,6 +140,7 @@ class AppSettings {
       exportFolderUri: j.containsKey('exportFolderUri') ? j['exportFolderUri'] as String? : b.exportFolderUri,
       exportFolderName: j.containsKey('exportFolderName') ? j['exportFolderName'] as String? : b.exportFolderName,
       demoInstalled: j['demoInstalled'] as bool? ?? b.demoInstalled,
+      previewMusic: j['previewMusic'] as bool? ?? b.previewMusic,
     );
   }
 }

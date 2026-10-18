@@ -23,7 +23,7 @@ List<TileNote> generateTiles(SongAnalysis a, DifficultyParams p, int seed) {
 List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, DifficultyParams p, int seed) {
   final rng = Rng(seed ^ 0x7111E5);
   final lanes = p.lanes.clamp(3, 6);
-  final beat = a.beatLengthMs;
+  final grid = a.grid;
   final notes = <TileNote>[];
   final laneFreeAt = List<double>.filled(lanes, -1e9);
   final laneLastTime = List<double>.filled(lanes, -1e9);
@@ -32,18 +32,19 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
   var lastTime = -1e9;
   var stairDir = 1;
   final overlapHolds = p.chordAllowance >= 0.15;
-  final releaseGap = math.max(p.minGapMs, beat / 2);
 
   for (var i = 0; i < candidates.length; i++) {
     final c = candidates[i];
     final t = c.timeMs;
+    final beat = grid.beatLengthAt(t);
+    final releaseGap = math.max(p.minGapMs, beat / 2);
     final gap = t - lastTime;
     final nextTime = i + 1 < candidates.length ? candidates[i + 1].timeMs : double.infinity;
 
     // --- chord size ---------------------------------------------------------
     var k = 1;
     if (p.chordAllowance > 0) {
-      final downbeat = c.barSlot(a.barOffsetBeats) % 8 == 0;
+      final downbeat = c.strongBeat;
       var p2 = p.chordAllowance * math.pow(c.strength, 1.5) * (c.onset.low > 0.6 ? 1.3 : 0.8);
       if (downbeat) p2 *= 1.4;
       if (gap < beat / 4 + 1) p2 *= 0.4; // keep fast streams readable

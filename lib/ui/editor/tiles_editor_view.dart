@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/models/beatmap.dart';
+import '../../core/models/timing.dart';
 import '../../game/tiles_painter.dart';
 import '../theme.dart';
 import 'editor_state.dart';
@@ -120,17 +121,20 @@ class _TilesEditorViewState extends State<TilesEditorView> {
       );
 }
 
-/// Beat-line colours by division, as editors conventionally draw them.
-Color beatLineColor(int index, int divisor, int barOffset) {
-  final perBeat = divisor;
-  final inBeat = index % perBeat;
-  if (inBeat == 0) {
-    final beatIndex = index ~/ perBeat;
-    return ((beatIndex - barOffset) % 4 + 4) % 4 == 0 ? Palette.bone.withValues(alpha: 0.55) : Palette.bone.withValues(alpha: 0.22);
+/// Beat-line colours by division, as editors conventionally draw them:
+/// bars bright, beats dim, halves rose, quarters blue, thirds amber.
+Color gridLineColor(GridLine l, int divisor) {
+  switch (l.kind) {
+    case GridLineKind.downbeat:
+      return Palette.bone.withValues(alpha: 0.55);
+    case GridLineKind.beat:
+      return Palette.bone.withValues(alpha: 0.22);
+    case GridLineKind.sub:
+      if (divisor.isEven && l.index * 2 == divisor) return Palette.rose.withValues(alpha: 0.45);
+      if (divisor % 4 == 0 && (l.index * 4) % divisor == 0) return Palette.early.withValues(alpha: 0.45);
+      if (divisor % 3 == 0 && (l.index * 3) % divisor == 0) return Palette.amber.withValues(alpha: 0.45);
+      return Palette.amber.withValues(alpha: 0.25);
   }
-  if (perBeat >= 2 && inBeat * 2 == perBeat) return Palette.rose.withValues(alpha: 0.45);
-  if (perBeat >= 4 && (inBeat * 4) % perBeat == 0) return Palette.early.withValues(alpha: 0.45);
-  return Palette.amber.withValues(alpha: 0.25);
 }
 
 class _TilesEditorPainter extends CustomPainter {
@@ -169,12 +173,9 @@ class _TilesEditorPainter extends CustomPainter {
     }
 
     // Beat grid at the snap resolution.
-    final step = a.beatLengthMs / ed.snapDivisor;
-    var k = ((tBottom - a.beatOffsetMs) / step).floor();
-    for (var t = a.beatOffsetMs + k * step; t <= tTop; t += step, k++) {
-      if (t < 0) continue;
-      p.color = beatLineColor(k, ed.snapDivisor, a.barOffsetBeats);
-      canvas.drawRect(Rect.fromLTWH(gutter, y(t) - 0.5, size.width - gutter, 1), p);
+    for (final l in ed.grid.lines(math.max(0.0, tBottom), tTop, ed.snapDivisor)) {
+      p.color = gridLineColor(l, ed.snapDivisor);
+      canvas.drawRect(Rect.fromLTWH(gutter, y(l.timeMs) - 0.5, size.width - gutter, 1), p);
     }
 
     // Waveform in the gutter (time runs upward).
@@ -188,10 +189,12 @@ class _TilesEditorPainter extends CustomPainter {
       final w = a.waveform[i] * (gutter / 2 - 4);
       canvas.drawRect(Rect.fromLTRB(cx - w, y(i * res) - rowH, cx + w, y(i * res)), p);
     }
-    // Time labels each 2 bars.
-    final bar = a.beatLengthMs * 4;
-    for (var t = a.firstDownbeatMs + ((tBottom - a.firstDownbeatMs) / bar).floor() * bar; t <= tTop; t += bar * 2) {
-      if (t < 0) continue;
+    // Time labels on bar lines, spaced so they never crowd.
+    var lastLabelY = double.infinity;
+    for (final l in ed.grid.lines(math.max(0.0, tBottom), tTop, 1)) {
+      if (l.kind != GridLineKind.downbeat || lastLabelY - y(l.timeMs) < 48) continue;
+      lastLabelY = y(l.timeMs);
+      final t = l.timeMs;
       final s = (t / 1000);
       final tp = TextPainter(
         text: TextSpan(text: '${(s ~/ 60)}:${(s % 60).floor().toString().padLeft(2, '0')}', style: AppText.data(9.5)),

@@ -1,9 +1,13 @@
 import 'dart:io';
 
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/import/osu_beatmap.dart';
+import '../core/import/osu_convert.dart';
+import '../core/models/beatmap.dart';
 import '../core/models/song.dart';
 import '../core/util/ids.dart';
 import '../platform/native_bridge.dart';
@@ -43,6 +47,21 @@ class DuplicateSongException implements Exception {
 
 /// Media types accepted by the importer.
 const importMimeTypes = ['video/mp4', 'audio/*', 'video/*'];
+
+/// What an osu! beatmap set import produced.
+class OszImportResult {
+  const OszImportResult({required this.song, required this.added, required this.skipped, required this.existingSong});
+  final Song song;
+
+  /// Converted difficulties.
+  final List<Beatmap> added;
+
+  /// Difficulties left out, and why.
+  final List<OsuSkip> skipped;
+
+  /// The song was already in the library; only difficulties were added.
+  final bool existingSong;
+}
 
 /// Import → extract audio → analyze (isolate) → generate default maps.
 class ImportService {
@@ -93,11 +112,17 @@ class ImportService {
     String sourcePath,
     String sourceName,
     String fallbackTitle,
-    void Function(ImportProgress) onProgress,
-  ) async {
-    final hash = await contentHash(File(sourcePath));
+    void Function(ImportProgress) onProgress, {
+    String? title,
+    String? artist,
+    String? cover,
+    double? previewMs,
+    String? hash,
+  }) async {
+    hash ??= await contentHash(File(sourcePath));
     final dup = await repo.songByHash(hash);
     if (dup != null) throw DuplicateSongException(dup);
+    final titleOverride = title, artistOverride = artist;
 
     onProgress(ImportProgress(ImportStage.reading, 0.06, title: fallbackTitle));
     final coverPath = repo.paths.coverFile(id, 'cover.jpg');
@@ -107,8 +132,8 @@ class ImportService {
     } on PlatformException {
       // Tags are optional.
     }
-    final title = meta.title ?? _prettify(fallbackTitle);
-    final artist = meta.artist ?? 'Unknown artist';
+    title = titleOverride ?? meta.title ?? _prettify(fallbackTitle);
+    artist = artistOverride ?? meta.artist ?? 'Unknown artist';
 
     final pcmPath = p.join(repo.paths.songDir(id), 'pcm.raw');
     onProgress(ImportProgress(ImportStage.decoding, 0.08, title: title));
@@ -147,10 +172,147 @@ class ImportService {
       sourceName: sourceName,
       hash: hash,
       hasVideo: meta.hasVideo,
-      cover: meta.hasCover ? 'cover.jpg' : null,
+      cover: cover ?? (meta.hasCover ? 'cover.jpg' : null),
       result: result,
       onProgress: onProgress,
+      previewMs: previewMs,
     );
+  }
+
+  /// Imports an osu! beatmap set (`.osz`): the song comes in like any other
+  /// import (analysis and generated difficulties included) and every
+  /// osu!standard and osu!mania difficulty is converted alongside. If the
+  /// song is already in the library, only the difficulties are added.
+  Future<OszImportResult> importOsz(PickedFile picked, void Function(ImportProgress) onProgress) async {
+    final label = p.basenameWithoutExtension(picked.name);
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    // The archive helper picks its decoder from the extension.
+    final zipPath = p.join(repo.paths.tmpDir, 'incoming_$stamp.zip');
+    final dir = Directory(p.join(repo.paths.tmpDir, 'osz_$stamp'));
+    try {
+      onProgress(ImportProgress(ImportStage.copying, 0.02, title: label));
+      await Directory(repo.paths.tmpDir).create(recursive: true);
+      await _bridge.copyUri(picked.uri, zipPath);
+      try {
+        await extractFileToDisk(zipPath, dir.path);
+      } catch (_) {
+        throw const FormatException('This file is not an osu! beatmap set (.osz).');
+      }
+      return await importOszFolder(dir, onProgress, label: label);
+    } finally {
+      try {
+        await File(zipPath).delete();
+      } catch (_) {}
+      try {
+        if (await dir.exists()) await dir.delete(recursive: true);
+      } catch (_) {}
+    }
+  }
+
+  /// Imports an extracted beatmap set folder.
+  Future<OszImportResult> importOszFolder(Directory dir, void Function(ImportProgress) onProgress, {String label = 'osu! beatmap'}) async {
+    onProgress(ImportProgress(ImportStage.reading, 0.05, title: label));
+    final files = await dir.list(recursive: true).where((e) => e is File).cast<File>().toList();
+    File? find(String name) {
+      final want = name.toLowerCase().replaceAll('\\', '/');
+      for (final f in files) {
+        final rel = p.relative(f.path, from: dir.path).toLowerCase().replaceAll('\\', '/');
+        if (rel == want || p.basename(rel) == want) return f;
+      }
+      return null;
+    }
+
+    final parsed = <OsuBeatmap>[];
+    for (final f in files.where((f) => f.path.toLowerCase().endsWith('.osu'))) {
+      try {
+        parsed.add(parseOsu(await f.readAsString()));
+      } catch (_) {
+        // A broken difficulty file doesn't stop the others.
+      }
+    }
+    if (parsed.isEmpty) throw const FormatException('No osu! difficulties (.osu files) in this beatmap set.');
+
+    // The audio most difficulties use.
+    final counts = <String, int>{};
+    for (final m in parsed) {
+      counts[m.audioFilename] = (counts[m.audioFilename] ?? 0) + 1;
+    }
+    final audioName = (counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value))).first.key;
+    final audio = find(audioName);
+    if (audio == null) throw FormatException('The beatmap set is missing its audio file ($audioName).');
+    final first = parsed.firstWhere((m) => m.audioFilename == audioName);
+    final title = first.displayTitle.trim().isEmpty ? label : first.displayTitle.trim();
+    final artist = first.displayArtist.trim().isEmpty ? 'Unknown artist' : first.displayArtist.trim();
+
+    final hash = await contentHash(audio);
+    var song = await repo.songByHash(hash);
+    final existing = song != null;
+    if (song == null) {
+      final id = newId();
+      final songDir = Directory(repo.paths.songDir(id));
+      try {
+        await songDir.create(recursive: true);
+        final ext = p.extension(audio.path).toLowerCase();
+        final sourceName = 'source${ext.isEmpty ? '.mp3' : ext}';
+        final dest = repo.paths.sourceFile(id, sourceName);
+        await audio.copy(dest);
+        String? cover;
+        final bg = first.background == null ? null : find(first.background!);
+        if (bg != null) {
+          final bext = p.extension(bg.path).toLowerCase();
+          if (const ['.jpg', '.jpeg', '.png', '.webp'].contains(bext)) {
+            cover = 'cover$bext';
+            await bg.copy(repo.paths.coverFile(id, cover));
+          }
+        }
+        song = await _process(
+          id,
+          dest,
+          sourceName,
+          title,
+          onProgress,
+          title: title,
+          artist: artist,
+          cover: cover,
+          previewMs: first.previewTime >= 0 ? first.previewTime.toDouble() : null,
+          hash: hash,
+        );
+      } catch (e) {
+        if (await songDir.exists()) await songDir.delete(recursive: true);
+        rethrow;
+      }
+    }
+
+    final added = <Beatmap>[];
+    final skipped = <OsuSkip>[];
+    // Difficulties imported from osu! before, by mode and name.
+    final existingNames = (await repo.beatmaps())
+        .where((b) => b.songId == song!.id && b.origin == 'osu')
+        .map((b) => '${b.mode.name}|${b.name}')
+        .toSet();
+    for (final m in parsed) {
+      if (m.audioFilename != audioName) {
+        skipped.add(OsuSkip(m.version, 'uses a different audio file'));
+        continue;
+      }
+      final map = convertOsu(m, songId: song.id, id: newId());
+      if (map == null) {
+        skipped.add(OsuSkip(m.version, '${osuModeName(m.mode)} maps can’t be played here yet'));
+        continue;
+      }
+      if (map.objectCount == 0) {
+        skipped.add(OsuSkip(m.version, 'has no objects'));
+        continue;
+      }
+      if (!existingNames.add('${map.mode.name}|${map.name}')) {
+        skipped.add(OsuSkip(m.version, 'already imported'));
+        continue;
+      }
+      await repo.saveBeatmap(map);
+      added.add(map);
+    }
+    onProgress(ImportProgress(ImportStage.done, 1, title: title, songId: song.id));
+    return OszImportResult(song: song, added: added, skipped: skipped, existingSong: existing);
   }
 
   Future<Song> _save({
@@ -164,6 +326,7 @@ class ImportService {
     required AnalysisJobResult result,
     required void Function(ImportProgress) onProgress,
     bool isDemo = false,
+    double? previewMs,
   }) async {
     await repo.saveAnalysis(id, result.analysis);
     for (final m in result.beatmaps) {
@@ -183,6 +346,7 @@ class ImportService {
       status: AnalysisStatus.ready,
       fingerprint: result.analysis.fingerprint(64),
       isDemo: isDemo,
+      previewMs: previewMs,
     );
     await repo.putSong(song);
     onProgress(ImportProgress(ImportStage.done, 1, title: title, songId: id));

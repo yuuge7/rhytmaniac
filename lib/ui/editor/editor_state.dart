@@ -4,6 +4,7 @@ import '../../core/generator/beatmap_generator.dart';
 import '../../core/models/analysis.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
+import '../../core/models/timing.dart';
 
 enum CircleTool {
   circle('Circle', Icons.radio_button_unchecked_rounded),
@@ -42,9 +43,13 @@ class EditorState extends ChangeNotifier {
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
   int get objectCount => _map.objectCount;
-  double get beatMs => analysis.beatLengthMs;
+  /// The map's own timing (imported osu! maps) or the analysed grid.
+  late final BeatGrid grid = _map.grid ?? analysis.grid;
 
-  double snap(double t) => analysis.snap(t, snapDivisor).clamp(0.0, analysis.durationMs);
+  /// Beat length at the playhead.
+  double get beatMs => grid.beatLengthAt(timeMs);
+
+  double snap(double t) => grid.snap(t, snapDivisor).clamp(0.0, analysis.durationMs);
 
   void seek(double t) {
     timeMs = t.clamp(0.0, analysis.durationMs);
@@ -154,7 +159,7 @@ class EditorState extends ChangeNotifier {
   bool addTile(int lane, double startMs, [double? endMs]) {
     final s = snap(startMs);
     var e = endMs == null ? null : snap(endMs);
-    if (e != null && e - s < beatMs / snapDivisor * 0.99) e = null;
+    if (e != null && e - s < grid.beatLengthAt(s) / snapDivisor * 0.99) e = null;
     final end = e ?? s;
     for (final n in _map.tileNotes) {
       if (n.lane == lane && n.timeMs <= end + 1 && n.endMs >= s - 1) return false;
@@ -208,7 +213,8 @@ class EditorState extends ChangeNotifier {
 
   void addSlider(Point2 from, Point2 to) {
     final t = snap(timeMs);
-    final end = t + beatMs * sliderBeats;
+    final beat = grid.beatLengthAt(t);
+    final end = t + beat * sliderBeats;
     final mid = Point2((from.x + to.x) / 2, (from.y + to.y) / 2);
     final list = _map.circleObjects.where((o) => o.endMs < t - 1 || o.timeMs > end + 1).toList()
       ..add(CircleObject(
@@ -219,6 +225,7 @@ class EditorState extends ChangeNotifier {
         comboIndex: _comboFor(t),
         path: [from, mid, to],
         endTimeMs: end,
+        tickMs: beat,
       ))
       ..sort((a, b) => a.timeMs.compareTo(b.timeMs));
     apply(_map.copyWith(circleObjects: list));

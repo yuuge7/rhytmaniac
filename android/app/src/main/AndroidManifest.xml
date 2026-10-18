@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Android 9 and older only: save exports straight into Download/Rhytmaniac. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <application
         android:label="Rhytmaniac"
         android:name="${applicationName}"

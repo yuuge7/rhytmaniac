@@ -1,6 +1,7 @@
 import '../models/beatmap.dart';
 import '../models/difficulty.dart';
 import '../models/score.dart';
+import '../models/timing.dart';
 import '../scoring/score_processor.dart';
 import 'session.dart';
 
@@ -22,27 +23,34 @@ class TileNoteState {
 class TilesSession extends GameSession {
   TilesSession({
     required Beatmap map,
-    required this.mods,
+    required super.mods,
     required this.windows,
     double startTimeMs = double.negativeInfinity,
-  }) : lanes = map.difficulty.lanes {
+  })  : lanes = map.difficulty.lanes.clamp(1, 10),
+        super(hpDrain: map.difficulty.hpDrain) {
     final source = mods.mirror
         ? map.tileNotes.map((n) => n.copyWith(lane: lanes - 1 - n.lane)).toList()
         : map.tileNotes;
     for (final n in source) {
-      if (n.timeMs < startTimeMs) continue;
+      if (n.timeMs < startTimeMs || n.lane < 0 || n.lane >= lanes) continue;
       notes.add(TileNoteState(n));
     }
     notes.sort((a, b) => a.note.timeMs.compareTo(b.note.timeMs));
     _judge = Judge(windows);
     final total = notes.fold(0, (s, n) => s + (n.note.isHold ? 2 : 1));
-    processor = ScoreProcessor(totalJudgments: total, noFail: mods.noFail);
+    processor = GameSession.processorFor(judgments: total, hp: hpDrain, mods: mods);
     _laneNotes = List.generate(lanes, (l) => [for (final n in notes) if (n.note.lane == l) n]);
     _laneCursor = List.filled(lanes, 0);
+    laneDown = List.filled(lanes, false);
+    var end = 0.0;
+    for (final n in notes) {
+      if (n.note.endMs > end) end = n.note.endMs;
+    }
+    _endTimeMs = end;
+    breaks = findMapBreaks(notes.map((n) => (n.note.timeMs, n.note.endMs)), mods.rate);
   }
 
   final int lanes;
-  final Mods mods;
   final HitWindows windows;
   final List<TileNoteState> notes = [];
   @override
@@ -50,15 +58,24 @@ class TilesSession extends GameSession {
   late final Judge _judge;
   late final List<List<TileNoteState>> _laneNotes;
   late final List<int> _laneCursor;
-  final List<bool> laneDown = List.filled(6, false);
+  late final List<bool> laneDown;
   @override
   final List<HitFeedback> feedback = [];
+  @override
+  late final List<TimeSpan> breaks;
+  late final double _endTimeMs;
   int _firstActive = 0;
 
   double get _rate => mods.rate;
 
+  /// Index of the first note that still needs drawing or judging.
+  int get firstActive => _firstActive;
+
   @override
-  double get endTimeMs => notes.isEmpty ? 0 : notes.map((n) => n.note.endMs).reduce((a, b) => a > b ? a : b);
+  double get firstObjectMs => notes.isEmpty ? 0 : notes.first.note.timeMs;
+
+  @override
+  double get endTimeMs => _endTimeMs;
 
   /// Next note in [lane] whose head hasn't been judged.
   TileNoteState? _nextInLane(int lane) {
@@ -134,6 +151,7 @@ class TilesSession extends GameSession {
 
   @override
   void update(double timeMs) {
+    applyDrain(timeMs);
     final goodSong = windows.good * _rate;
     while (_firstActive < notes.length && notes[_firstActive].done) {
       _firstActive++;

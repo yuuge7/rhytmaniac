@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
 
 import '../../audio/app_audio.dart';
 import '../../core/audio/pcm.dart';
@@ -31,8 +30,8 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> with Sing
   double get beatMs => 60000 / bpm;
 
   AudioLease? _lease;
-  AudioPlayer get _player => _lease!.player;
-  AudioPlayer? get _audio => _lease?.player;
+  MusicPlayer get _player => _lease!.player;
+  MusicPlayer? get _audio => _lease?.player;
   late final Ticker _ticker;
   final _clock = SongClock();
   final List<double> _taps = [];
@@ -45,7 +44,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> with Sing
   void initState() {
     super.initState();
     _ticker = createTicker((_) {
-      if (_audio?.playing ?? false) _clock.sync(_player.position.inMicroseconds / 1000.0);
+      if (_audio?.playing ?? false) _clock.sync(_player.positionMs);
       setState(() => _now = _clock.audioTimeMs);
       if (_now > firstBeatMs + beats * beatMs + 500) _stop();
     });
@@ -85,7 +84,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> with Sing
     _lease!.reclaim();
     _taps.clear();
     _estimate = null;
-    await _player.seek(Duration.zero);
+    await _player.seek(0);
     _clock.start(0);
     _player.play();
     _ticker.start();

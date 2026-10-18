@@ -4,6 +4,7 @@ import '../models/difficulty.dart';
 import '../rating/star_rating.dart';
 import '../util/ids.dart';
 import 'circles_generator.dart';
+import 'note_selection.dart';
 import 'tiles_generator.dart';
 
 /// Entry point for map generation. Generation only reads the cached analysis,
@@ -31,6 +32,8 @@ class BeatmapGenerator {
       createdAt: DateTime.now(),
       tileNotes: mode == GameMode.tiles ? generateTiles(analysis, params, seed) : const [],
       circleObjects: mode == GameMode.circles ? generateCircles(analysis, params, seed) : const [],
+      timing: analysis.grid.points,
+      kiai: findKiai(analysis),
     );
     return map.copyWith(starRating: starRating(map));
   }

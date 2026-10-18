@@ -1,6 +1,10 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../audio/app_audio.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
 import '../../core/models/score.dart';
@@ -8,6 +12,7 @@ import '../../core/models/song.dart';
 import '../../core/rating/star_rating.dart';
 import '../../state/providers.dart';
 import '../export_flow.dart';
+import '../routes.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/signal_strip.dart';
@@ -34,8 +39,109 @@ class SongScreen extends ConsumerStatefulWidget {
   ConsumerState<SongScreen> createState() => _SongScreenState();
 }
 
-class _SongScreenState extends ConsumerState<SongScreen> {
+class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
   String? _selectedId;
+  AudioLease? _preview;
+  StreamSubscription<MusicEvent>? _previewEvents;
+  Timer? _fade;
+  bool _starting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startPreview());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    _stopPreview();
+    super.dispose();
+  }
+
+  /// Back on this page (a game, its results or the editor closed).
+  @override
+  void didPopNext() => _startPreview();
+
+  bool get _onTop => mounted && (ModalRoute.of(context)?.isCurrent ?? false);
+
+  /// Plays the song from its preview point, fading in, and loops it.
+  Future<void> _startPreview() async {
+    if (!ref.read(settingsProvider).previewMusic || _preview != null || _starting || !_onTop) return;
+    final song = ref.read(libraryProvider).song(widget.songId);
+    if (song == null) return;
+    _starting = true;
+    try {
+      final lease = await AppAudio.instance.open(ref.read(servicesProvider).paths.sourceFile(song.id, song.sourceFile));
+      if (!_onTop || _preview != null) {
+        lease.release();
+        return;
+      }
+      _preview = lease;
+      final p = lease.player;
+      final start = song.previewStartMs.clamp(0.0, math.max(0.0, song.durationMs - 8000)).toDouble();
+      await p.seek(start);
+      await p.setVolume(0);
+      await p.play();
+      final target = ref.read(settingsProvider).musicVolume * 0.8;
+      var step = 0;
+      _fade?.cancel();
+      _fade = Timer.periodic(const Duration(milliseconds: 60), (t) {
+        step++;
+        if (!lease.current || step > 14) {
+          t.cancel();
+          return;
+        }
+        p.setVolume(target * step / 14);
+      });
+      _previewEvents = p.events.listen((e) {
+        if (e.type == MusicEventType.completed && lease.current && _preview == lease) {
+          p.seek(start).then((_) => p.play());
+        }
+      });
+    } catch (_) {
+      // A preview is a nicety; the screen works without it.
+    } finally {
+      _starting = false;
+    }
+  }
+
+  void _stopPreview() {
+    _fade?.cancel();
+    _previewEvents?.cancel();
+    _previewEvents = null;
+    _preview?.release();
+    _preview = null;
+  }
+
+  /// Opens another screen with the preview stopped; [didPopNext] brings it
+  /// back once this page is on top again (after results, too).
+  Future<T?> _open<T>(Route<T> route) {
+    _stopPreview();
+    return Navigator.of(context).push(route);
+  }
+
+  Future<void> _watchReplay(Song song, ScoreRecord s) async {
+    final b = ref.read(libraryProvider).beatmaps.where((m) => m.id == s.beatmapId).firstOrNull;
+    if (b == null) return;
+    final map = await _load(b);
+    final replay = await ref.read(servicesProvider).repo.loadReplay(s.id);
+    if (map == null || !mounted) return;
+    if (replay == null) {
+      showMessage(context, 'This replay is no longer on the device.');
+      return;
+    }
+    await _open(MaterialPageRoute<void>(
+      builder: (_) => PlayScreen(request: PlayRequest(song: song, map: map, mods: replay.mods, replay: replay, saveScore: false)),
+    ));
+  }
 
   /// Star ratings recomputed for the current speed mod, keyed "id@rate".
   final Map<String, double> _rated = {};
@@ -75,7 +181,7 @@ class _SongScreenState extends ConsumerState<SongScreen> {
       // Custom difficulties can be built for a specific speed.
       mods = mods.copyWith(rate: map.difficulty.playbackRate);
     }
-    await Navigator.of(context).push(MaterialPageRoute(
+    await _open(MaterialPageRoute<void>(
       builder: (_) => PlayScreen(request: PlayRequest(song: song, map: map, mods: mods, loop: loop)),
     ));
   }
@@ -95,7 +201,7 @@ class _SongScreenState extends ConsumerState<SongScreen> {
     final map = await _load(b);
     final analysis = await ref.read(servicesProvider).repo.analysis(song.id);
     if (map == null || analysis == null || !mounted) return;
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditorScreen(song: song, map: map, analysis: analysis)));
+    await _open(MaterialPageRoute<void>(builder: (_) => EditorScreen(song: song, map: map, analysis: analysis)));
   }
 
   Future<void> _delete(BeatmapSummary b) async {
@@ -198,6 +304,7 @@ class _SongScreenState extends ConsumerState<SongScreen> {
       ),
     );
     if (ok == true && mounted) {
+      _stopPreview();
       Navigator.of(context).pop();
       await ref.read(libraryProvider.notifier).deleteSong(song.id);
     }
@@ -237,7 +344,7 @@ class _SongScreenState extends ConsumerState<SongScreen> {
                   await _songOffset(song);
                 case 'analysis':
                   if (context.mounted) {
-                    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => AnalysisScreen(song: song)));
+                    await _open(MaterialPageRoute<void>(builder: (_) => AnalysisScreen(song: song)));
                   }
                 case 'reanalyze':
                   await ref.read(importProvider.notifier).reanalyze(song);
@@ -362,6 +469,11 @@ class _SongScreenState extends ConsumerState<SongScreen> {
               selected: selected?.id == b.id,
               best: scoresNotifier.best(b.id),
               plays: scores.where((s) => s.beatmapId == b.id).length,
+              top: (scores.where((s) => s.beatmapId == b.id && !s.failed && !s.practice && !s.mods.autoplay).toList()
+                    ..sort((x, y) => y.score.compareTo(x.score)))
+                  .take(5)
+                  .toList(),
+              onReplay: (s) => _watchReplay(song, s),
               onTap: () => setState(() => _selectedId = b.id),
               onEdit: () => _edit(song, b),
               onPractice: () => _practice(song, b),
@@ -396,12 +508,18 @@ class _DifficultyRow extends StatelessWidget {
     required this.onDelete,
     required this.rate,
     required this.ratedStars,
+    required this.top,
+    required this.onReplay,
   });
 
   final BeatmapSummary summary;
   final bool selected;
   final ScoreRecord? best;
   final int plays;
+
+  /// Best local scores on this difficulty, highest first.
+  final List<ScoreRecord> top;
+  final void Function(ScoreRecord) onReplay;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onPractice;
@@ -441,6 +559,10 @@ class _DifficultyRow extends StatelessWidget {
                         children: [
                           Row(children: [
                             Flexible(child: Text(b.name, overflow: TextOverflow.ellipsis, style: AppText.body(15.5, weight: 650))),
+                            if (b.origin == 'osu') ...[
+                              const SizedBox(width: 8),
+                              Text('OSU!', style: AppText.data(9.5, weight: 700, color: Palette.rose, letterSpacing: 1)),
+                            ],
                             if (b.edited) ...[
                               const SizedBox(width: 8),
                               Text('EDITED', style: AppText.data(9.5, weight: 700, color: Palette.amber, letterSpacing: 1)),
@@ -486,12 +608,55 @@ class _DifficultyRow extends StatelessWidget {
                       IconButton(tooltip: 'Delete', onPressed: onDelete, icon: const Icon(Icons.delete_outline_rounded, size: 20)),
                     ],
                   ),
+                  if (top.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                      child: Text('LOCAL RANKING', style: AppText.label()),
+                    ),
+                    for (var i = 0; i < top.length; i++) _scoreLine(i + 1, top[i]),
+                  ],
                 ],
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+extension on _DifficultyRow {
+  Widget _scoreLine(int rank, ScoreRecord s) {
+    final d = s.timestamp;
+    final date = '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+    return Padding(
+      padding: const EdgeInsets.only(left: 16),
+      child: Row(children: [
+        SizedBox(width: 22, child: Text('$rank', style: AppText.data(11.5, color: Palette.mist))),
+        GradeMark(s.grade, size: 15),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '${formatScore(s.score)} · ${(s.accuracy * 100).toStringAsFixed(2)}% · ${s.maxCombo}×${s.mods.acronyms.isEmpty ? '' : ' · ${s.mods.acronyms.join('')}'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppText.data(11, color: Palette.bone),
+          ),
+        ),
+        Text(date, style: AppText.data(10.5, color: Palette.dim)),
+        SizedBox(
+          width: 40,
+          height: 34,
+          child: s.hasReplay
+              ? IconButton(
+                  tooltip: 'Watch replay',
+                  padding: EdgeInsets.zero,
+                  onPressed: () => onReplay(s),
+                  icon: const Icon(Icons.slideshow_rounded, size: 18, color: Palette.amber),
+                )
+              : null,
+        ),
+      ]),
     );
   }
 }
@@ -507,15 +672,48 @@ class _ModsSheet extends StatefulWidget {
 class _ModsSheetState extends State<_ModsSheet> {
   late Mods m = widget.initial;
 
+  /// osu!'s pairs that can't be on together: turning one on turns the
+  /// others off.
+  Mods _set(Mods next, String changed, bool on) {
+    if (!on) return next;
+    switch (changed) {
+      case 'easy':
+        return next.copyWith(hardRock: false);
+      case 'hardRock':
+        return next.copyWith(easy: false);
+      case 'noFail':
+        return next.copyWith(suddenDeath: false, perfect: false);
+      case 'suddenDeath':
+        return next.copyWith(noFail: false, perfect: false, autoplay: false);
+      case 'perfect':
+        return next.copyWith(noFail: false, suddenDeath: false, autoplay: false);
+      case 'autoplay':
+        return next.copyWith(suddenDeath: false, perfect: false);
+    }
+    return next;
+  }
+
   @override
   Widget build(BuildContext context) {
-    Widget toggle(String title, String subtitle, bool value, ValueChanged<bool> on) => SwitchListTile(
-          value: value,
-          onChanged: on,
-          title: Text(title, style: AppText.body(15, weight: 600)),
-          subtitle: Text(subtitle, style: AppText.body(12.5, color: Palette.mist)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+    Widget chip(String label, String code, String tip, bool value, Mods Function(bool) apply, String key) => Tooltip(
+          message: tip,
+          child: FilterChip(
+            label: Text(label),
+            avatar: Text(code, style: AppText.data(10.5, weight: 700, color: value ? Palette.amber : Palette.mist)),
+            showCheckmark: false,
+            selected: value,
+            onSelected: (v) => setState(() => m = _set(apply(v), key, v)),
+          ),
         );
+    Widget group(String title, List<Widget> chips) => Padding(
+          padding: const EdgeInsets.fromLTRB(Space.gutter, 14, Space.gutter, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title.toUpperCase(), style: AppText.label()),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: chips),
+          ]),
+        );
+    final mult = m.scoreMultiplier;
     return SafeArea(
       child: SingleChildScrollView(
         child: Column(
@@ -524,7 +722,11 @@ class _ModsSheetState extends State<_ModsSheet> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, 4),
-              child: Text('Mods', style: AppText.display(22, width: 120, weight: 800)),
+              child: Row(children: [
+                Text('Mods', style: AppText.display(22, width: 120, weight: 800)),
+                const Spacer(),
+                Text('Score ×${mult.toStringAsFixed(2)}', style: AppText.data(13, weight: 600, color: mult >= 1 ? Palette.amber : Palette.mist)),
+              ]),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(Space.gutter, 8, Space.gutter, 0),
@@ -543,22 +745,40 @@ class _ModsSheetState extends State<_ModsSheet> {
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
-              child: Wrap(spacing: 8, children: [
-                for (final r in const [0.75, 1.0, 1.25, 1.5])
+              child: Wrap(spacing: 8, runSpacing: 8, children: [
+                for (final (label, r) in const [('Half time 0.75×', 0.75), ('1×', 1.0), ('1.25×', 1.25), ('Double time 1.5×', 1.5)])
                   ChoiceChip(
-                    label: Text('$r×'),
+                    label: Text(label),
                     selected: m.rate == r,
                     onSelected: (_) => setState(() => m = m.copyWith(rate: r)),
                   ),
+                FilterChip(
+                  label: const Text('Nightcore'),
+                  tooltip: 'Pitch rises and falls with the speed',
+                  selected: m.nightcore,
+                  onSelected: (v) => setState(() => m = m.copyWith(nightcore: v)),
+                ),
               ]),
             ),
-            const SizedBox(height: 8),
-            toggle('No-Fail', 'Health never runs out', m.noFail, (v) => setState(() => m = m.copyWith(noFail: v))),
-            toggle('Hidden', 'Notes fade out before they reach you', m.hidden, (v) => setState(() => m = m.copyWith(hidden: v))),
-            toggle('Mirror', 'Flip lanes or the playfield left to right', m.mirror, (v) => setState(() => m = m.copyWith(mirror: v))),
-            toggle('Autoplay', 'Watch a perfect run. Scores aren’t saved.', m.autoplay, (v) => setState(() => m = m.copyWith(autoplay: v))),
+            group('Easier', [
+              chip('Easy', 'EZ', 'Bigger circles, slower approach, wider timing, gentler health', m.easy, (v) => m.copyWith(easy: v), 'easy'),
+              chip('No-Fail', 'NF', 'Health never runs out', m.noFail, (v) => m.copyWith(noFail: v), 'noFail'),
+            ]),
+            group('Harder', [
+              chip('Hard Rock', 'HR', 'Smaller circles, faster approach, tighter timing; Circles flip upside down', m.hardRock,
+                  (v) => m.copyWith(hardRock: v), 'hardRock'),
+              chip('Hidden', 'HD', 'Notes fade out before they reach you', m.hidden, (v) => m.copyWith(hidden: v), 'hidden'),
+              chip('Flashlight', 'FL', 'Only the area around your finger or the hit line is lit', m.flashlight,
+                  (v) => m.copyWith(flashlight: v), 'flashlight'),
+              chip('Sudden Death', 'SD', 'The first miss ends the run', m.suddenDeath, (v) => m.copyWith(suddenDeath: v), 'suddenDeath'),
+              chip('Perfect', 'PF', 'Anything less than Perfect ends the run', m.perfect, (v) => m.copyWith(perfect: v), 'perfect'),
+            ]),
+            group('Other', [
+              chip('Mirror', 'MR', 'Flip lanes or the playfield left to right', m.mirror, (v) => m.copyWith(mirror: v), 'mirror'),
+              chip('Autoplay', 'AT', 'Watch a perfect run. Scores aren’t saved.', m.autoplay, (v) => m.copyWith(autoplay: v), 'autoplay'),
+            ]),
             Padding(
-              padding: const EdgeInsets.fromLTRB(Space.gutter, 8, Space.gutter, 8),
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 16, Space.gutter, 8),
               child: Row(children: [
                 TextButton(onPressed: () => setState(() => m = const Mods()), child: const Text('Reset')),
                 const Spacer(),

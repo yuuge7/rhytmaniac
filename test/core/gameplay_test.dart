@@ -286,7 +286,9 @@ void main() {
         s.update(t);
       }
       expect(s.complete, isTrue);
-      expect(s.processor.score, 1000000);
+      // Autoplay spins fast enough to earn spinner bonus on top.
+      expect(s.processor.bonus, greaterThan(0));
+      expect(s.processor.score - s.processor.bonus, 1000000);
     });
   });
 

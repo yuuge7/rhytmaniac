@@ -15,11 +15,14 @@ double playfieldDistance(Point2 a, Point2 b) {
   return math.sqrt(dx * dx + dy * dy);
 }
 
-/// Bezier curve through a control polygon (normalized coordinates) with an
-/// arc-length lookup so a slider ball moves at constant speed.
+/// A slider's path in normalized coordinates with an arc-length lookup so the
+/// ball moves at constant speed: a Bezier curve through a control polygon,
+/// or (for imported sliders) a ready-made polyline.
 class SliderCurve {
-  SliderCurve(List<Point2> control, {int samples = 48})
-      : _points = List.generate(samples + 1, (i) => _bezier(control, i / samples)) {
+  SliderCurve(List<Point2> control, {int samples = 48, SliderPathKind kind = SliderPathKind.bezier})
+      : _points = kind == SliderPathKind.linear && control.length >= 2
+            ? List<Point2>.of(control)
+            : List.generate(samples + 1, (i) => _bezier(control, i / samples)) {
     _cumulative.add(0);
     for (var i = 1; i < _points.length; i++) {
       _cumulative.add(_cumulative.last + playfieldDistance(_points[i - 1], _points[i]));
@@ -28,6 +31,10 @@ class SliderCurve {
 
   final List<Point2> _points;
   final List<double> _cumulative = [];
+
+  /// The path a slider object follows, or null for other objects.
+  static SliderCurve? of(CircleObject o, {int samples = 48}) =>
+      o.isSlider && o.path != null && o.path!.isNotEmpty ? SliderCurve(o.path!, samples: samples, kind: o.curve) : null;
 
   /// Length in playfield-width units.
   double get length => _cumulative.last;

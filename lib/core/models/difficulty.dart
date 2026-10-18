@@ -42,6 +42,7 @@ class DifficultyParams {
     required this.playbackRate,
     required this.spinners,
     this.maxNotesPerSecond = 99,
+    this.hpDrain = 5,
   });
 
   final DifficultyPreset preset;
@@ -91,6 +92,10 @@ class DifficultyParams {
   /// Density cap: weakest notes are dropped until the map is under this.
   final double maxNotesPerSecond;
 
+  /// Health drain 0 (gentle) .. 10 (harsh): passive drain over time and how
+  /// much a miss costs, like osu!'s HP setting.
+  final double hpDrain;
+
   /// Perfect / Great / Good windows in real milliseconds.
   double get windowScale => 1.4 - 0.08 * hitWindow;
 
@@ -114,6 +119,7 @@ class DifficultyParams {
     double? playbackRate,
     bool? spinners,
     double? maxNotesPerSecond,
+    double? hpDrain,
   }) =>
       DifficultyParams(
         preset: preset ?? this.preset,
@@ -132,6 +138,7 @@ class DifficultyParams {
         playbackRate: playbackRate ?? this.playbackRate,
         spinners: spinners ?? this.spinners,
         maxNotesPerSecond: maxNotesPerSecond ?? this.maxNotesPerSecond,
+        hpDrain: hpDrain ?? this.hpDrain,
       );
 
   Map<String, dynamic> toJson() => {
@@ -151,13 +158,18 @@ class DifficultyParams {
         'playbackRate': playbackRate,
         'spinners': spinners,
         'maxNotesPerSecond': maxNotesPerSecond,
+        'hpDrain': hpDrain,
       };
 
   factory DifficultyParams.fromJson(Map<String, dynamic> j) {
     final base = DifficultyParams.preset(GameMode.tiles, DifficultyPreset.normal);
     double d(String k, double fallback) => (j[k] as num?)?.toDouble() ?? fallback;
+    final preset = DifficultyPreset.values.asNameMap()[j['preset']] ?? DifficultyPreset.custom;
+    // Maps saved before hpDrain existed get their preset's value.
+    final presetLevel = DifficultyPreset.ladder.indexOf(preset);
+    final defaultHp = presetLevel < 0 ? base.hpDrain : DifficultyParams.level(GameMode.tiles, presetLevel.toDouble()).hpDrain;
     return DifficultyParams(
-      preset: DifficultyPreset.values.asNameMap()[j['preset']] ?? DifficultyPreset.custom,
+      preset: preset,
       strengthThreshold: d('strengthThreshold', base.strengthThreshold),
       minGapMs: d('minGapMs', base.minGapMs),
       snapDivisor: (j['snapDivisor'] as num?)?.toInt() ?? base.snapDivisor,
@@ -173,6 +185,7 @@ class DifficultyParams {
       playbackRate: d('playbackRate', 1.0),
       spinners: j['spinners'] as bool? ?? true,
       maxNotesPerSecond: d('maxNotesPerSecond', 99),
+      hpDrain: d('hpDrain', defaultHp),
     );
   }
 
@@ -218,6 +231,7 @@ class DifficultyParams {
       playbackRate: 1.0,
       spinners: l >= 0.5,
       maxNotesPerSecond: lerp(tiles ? [1.3, 2.4, 3.6, 5.2, 7.5] : [1.2, 2.2, 3.2, 4.4, 6.0]).clamp(0.5, 20.0),
+      hpDrain: lerp([2, 3.5, 5, 6, 7]).clamp(0.0, 10.0),
     );
   }
 

@@ -23,7 +23,7 @@ List<CircleObject> generateCircles(SongAnalysis a, DifficultyParams p, int seed)
 
 List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, DifficultyParams p, int seed) {
   final rng = Rng(seed ^ 0xC1C1E5);
-  final beat = a.beatLengthMs;
+  final grid = a.grid;
   final r = p.circleRadius;
   const margin = 0.02;
   final minX = r + margin, maxX = 1 - r - margin;
@@ -44,7 +44,6 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
   var comboLength = 0;
   var lastEnd = -1e9;
   var lastSpinner = -1e9;
-  final releaseGap = math.max(p.minGapMs, beat / 2);
 
   void newCombo(double t) {
     combo++;
@@ -55,6 +54,9 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
   for (var i = 0; i < candidates.length; i++) {
     final c = candidates[i];
     final t = c.timeMs;
+    final section = grid.at(t);
+    final beat = section.beatLengthMs;
+    final releaseGap = math.max(p.minGapMs, beat / 2);
     final nextTime = i + 1 < candidates.length ? candidates[i + 1].timeMs : a.durationMs;
     final gap = t - lastEnd;
 
@@ -81,7 +83,7 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
     }
 
     // --- combo ------------------------------------------------------------------------
-    final phrase = c.barSlot(a.barOffsetBeats) % 32 == 0 || c.barSlot(a.barOffsetBeats) % 16 == 0;
+    final phrase = c.barStart;
     final sinceCombo = t - comboStart;
     final startCombo = combo < 0 ||
         t - lastEnd >= beat * 2 ||
@@ -146,7 +148,7 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
         absorbs = true;
       }
       if (end - t >= minLen) {
-        final step = beat / math.max(1, p.snapDivisor);
+        final step = beat / gridDivisor(section, p.snapDivisor);
         sliderEnd = t + ((end - t) / step).floor() * step;
         if (sliderEnd - t < minLen) sliderEnd = null;
       }
@@ -201,6 +203,7 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
           comboIndex: combo,
           path: normalized,
           endTimeMs: sliderEnd,
+          tickMs: beat,
         ));
         placed.add((time: t, end: sliderEnd, pos: head, endPos: ctrl.last));
         pos = ctrl.last;
