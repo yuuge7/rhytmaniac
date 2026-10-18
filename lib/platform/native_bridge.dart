@@ -41,11 +41,39 @@ class NativeBridge {
   static final instance = NativeBridge._();
   static const _channel = MethodChannel('rhytmaniac/native');
   final Map<String, void Function(double)> _decodeListeners = {};
+  final _fileOpened = StreamController<void>.broadcast();
+
+  /// Fires when another app opens or shares a file with Rhytmaniac while it
+  /// runs; fetch it with [takeOpenedFile].
+  Stream<void> get fileOpened => _fileOpened.stream;
 
   Future<dynamic> _onCall(MethodCall call) async {
     if (call.method == 'decodeProgress') {
       final args = (call.arguments as Map).cast<String, dynamic>();
       _decodeListeners[args['id'] as String]?.call((args['progress'] as num).toDouble());
+    } else if (call.method == 'fileOpened') {
+      _fileOpened.add(null);
+    }
+  }
+
+  /// The file Rhytmaniac was opened with (or that was shared to it), once.
+  Future<PickedFile?> takeOpenedFile() async {
+    final r = await _channel.invokeMapMethod<String, dynamic>('takeOpenedFile');
+    if (r == null) return null;
+    return PickedFile(
+      uri: r['uri'] as String,
+      name: r['name'] as String? ?? 'file',
+      size: (r['size'] as num?)?.toInt(),
+      mime: r['mime'] as String?,
+    );
+  }
+
+  /// Asks the display for its fastest refresh rate (or back to 60 Hz).
+  Future<void> setHighRefreshRate(bool on) async {
+    try {
+      await _channel.invokeMethod('setHighRefreshRate', {'on': on});
+    } on MissingPluginException {
+      // Not on Android.
     }
   }
 

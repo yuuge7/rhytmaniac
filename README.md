@@ -113,12 +113,21 @@ builds playable maps from about 1★ to 5★+, for two game modes.
 - Editor: zoomable timeline with waveform and beat grid, snap divisors, slowed
   playback, place/drag/delete notes, draw holds and sliders, undo/redo, regenerate a
   section, test-play from any point. Edits are saved as separate difficulties.
-- Library sorting and search, a local ranking per difficulty, song previews on the
-  song page, and a profile with your Pulse rating, best plays, most played songs and
-  accuracy trend.
-- Share songs as zip packs; move your whole profile (scores, settings, optionally
-  your library) to another device. Exports go to `Download/Rhytmaniac` or any folder
-  you choose.
+- Library sorting, search, favorites, your own collections, star and length
+  filters, and a random-song button; a local ranking per difficulty and song
+  previews on the song page.
+- Performance points (pp) for every play, modelled on osu!, and a profile total from
+  your best plays, with best plays, most played songs and accuracy trend.
+- 52 medals for clears and full combos by star rating, accuracy, mods, combos,
+  dedication and exploring the app, shown on the profile and announced when earned.
+- Open `.osz` beatmap sets, songs, videos and song packs straight from a browser or
+  file manager ("Open with" or "Share").
+- Comfort and access: 90/120 Hz on screens that support it, a reduced-effects mode
+  for slow phones, colorblind-friendly colors and a left-handed layout. Taps are
+  timed by when your finger landed, not by when the app got to them.
+- Share songs as zip packs; move your whole profile (scores, medals, collections,
+  settings, optionally your library) to another device. Exports go to
+  `Download/Rhytmaniac` or any folder you choose.
 
 ## Install
 
@@ -165,6 +174,12 @@ Android 7.0 or newer.
   `points × (combo − 1) × difficulty × mods ÷ 25`, where the difficulty multiplier
   (1–6) comes from HP, circle size (lane count in Tiles), timing strictness and note
   density. Slider ticks add 10, repeats 30, bonus spinner spins 1,000.
+- **Performance points** follow osu!: in Circles, aim and speed values grow with the
+  cube of the stars and an accuracy value grows with timing strictness, combined by
+  a 1.1 power sum and scaled by length, combo and misses; in Tiles (like
+  osu!mania), a strain value from the stars scales with how close accuracy is to
+  perfect. The profile total weights your best play per difficulty 100%, 95%,
+  90%, … plus a small bonus for the number of maps played.
 - **Star rating** collects decaying per-object strain (Tiles: per-lane, overall and
   hold strain; Circles: aim and speed, scaled to circle size) in 400 ms sections and
   sums the sorted peaks with geometric weights. Presets are calibrated to land near
@@ -367,10 +382,12 @@ All files are JSON with a `formatVersion` field; readers stay backward compatibl
 | `beatmap.json` (v2) | `mode`, metadata, difficulty parameters (incl. `hpDrain`), `seed`, `starRating`, `edited`, `timing`?, `kiai`? (`[start, end]` pairs), `origin`? (`"osu"`), `objects` |
 | Tiles object | `{ "type": "tap" \| "hold", "timeMs", "lane", "endTimeMs"? }` |
 | Circles object | `{ "type": "circle" \| "slider" \| "spinner", "timeMs", "x", "y", "comboIndex", "path"?, "curve"? (`"linear"` for sampled paths), "repeats"?, "tickMs"?, "endTimeMs"? }` — coordinates normalized to 0–1 on a fixed-aspect playfield |
-| Score (v3) | judgments, accuracy, score (osu!-style, no cap; scores saved before v3 were out of 1,000,000), max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash, `hasReplay` |
+| Score (v4) | judgments, accuracy, score (osu!-style, no cap; scores saved before v3 were out of 1,000,000), max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash, `hasReplay`, `pp`, `mapMaxCombo`, `objectCount`, `strictness`, `lanes`, `origin` (older scores get an estimated pp) |
+| Progress (key-value store) | `{ formatVersion, medals: { id: unlocked time }, counters: { name: count } }` |
+| Collections (key-value store) | `{ name: [songId, …] }` (exported by audio hash) |
 | Replay `replays/<scoreId>.json.gz` | `scoreId`, `beatmapId`, `mode`, `mods`, `player`, `frames` (flat `[timeMs, action, pointer or lane, x, y, …]`) |
 | Song pack `*.rhpack.zip` | `manifest.json` + `songs/<id>/{source.*, cover.jpg, analysis.json, maps/*.json}` |
-| Profile `*.rhprofile.zip` | `manifest.json` + `profile.json` (player, settings, scores, play stats), optionally the full library; scores re-link to songs by audio hash |
+| Profile `*.rhprofile.zip` | `manifest.json` + `profile.json` (player, settings, scores, play stats, progress, collections), optionally the full library; scores and collections re-link to songs by audio hash, medals merge (earliest unlock wins) |
 
 ## Contributing
 

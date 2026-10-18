@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' show Timeline;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -14,12 +15,14 @@ import '../../core/gameplay/replay_driver.dart';
 import '../../core/gameplay/session.dart';
 import '../../core/gameplay/tiles_session.dart';
 import '../../core/generator/note_selection.dart';
+import '../../core/medals.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
 import '../../core/models/replay.dart';
 import '../../core/models/score.dart';
 import '../../core/models/song.dart';
 import '../../core/models/timing.dart';
+import '../../core/rating/performance.dart';
 import '../../core/rating/star_rating.dart';
 import '../../core/timing/song_clock.dart';
 import '../../core/util/ids.dart';
@@ -30,6 +33,7 @@ import '../../game/hud.dart';
 import '../../game/tiles_painter.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
+import '../widgets/medals.dart';
 import 'results_screen.dart';
 
 class PlayRequest {
@@ -213,6 +217,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     s.onFeedback = _onFeedback;
     s.onEvent = _onSessionEvent;
     _session = s;
+    _updatedTo = double.negativeInfinity;
     _hud.reset();
     _trails.clear();
     _recorder.clear();
@@ -306,6 +311,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       final t = _clock.timeMs;
       _replayDriver?.advanceTo(t);
       session.update(t);
+      if (t > _updatedTo) _updatedTo = t;
       if (_timeline.isEmpty || t - _timeline.last.timeMs >= 250 * mods.rate) {
         if (t >= session.firstObjectMs) _timeline.add(RunSample(t, session.processor.health, session.processor.accuracy));
       }
@@ -347,6 +353,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   Future<void> _restartLoop() async {
     _loops++;
+    // Medals from practice show up on the profile; no pop-ups mid-song.
+    ref.read(progressProvider.notifier).bump(Counters.practiceLoops);
     _buildSession();
     final from = req.loop!.$1;
     final start = math.max(0.0, from - 1500 * mods.rate);
@@ -390,11 +398,33 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   bool get _acceptsInput => _phase == _Phase.playing && _size != Size.zero && !req.isReplay;
 
+  /// Song time the session was last advanced to.
+  double _updatedTo = double.negativeInfinity;
+
+  /// Song time when the finger actually touched, not when the event reached
+  /// this handler (a frame or more later when the phone is busy). Touch
+  /// timestamps and [Timeline.now] share the system's monotonic clock; if
+  /// the gap looks implausible, the current time is used instead.
+  double _eventTime(PointerEvent e) {
+    final now = _clock.timeMs;
+    final ageMicros = Timeline.now - e.timeStamp.inMicroseconds;
+    if (ageMicros <= 0 || ageMicros > 100000) return now;
+    return now - ageMicros / 1000 * mods.rate;
+  }
+
+  /// Advances the session to an input's time first, so judgments don't
+  /// depend on when frames happen to land (replays rely on this too).
+  void _advanceTo(double t) {
+    if (t <= _updatedTo) return;
+    _session?.update(t);
+    _updatedTo = t;
+  }
+
   void _down(PointerDownEvent e) {
     if (!_acceptsInput) return;
-    final t = _clock.timeMs;
+    final t = _eventTime(e);
     final s = _session;
-    s?.update(t);
+    _advanceTo(t);
     if (s is TilesSession) {
       final lane = TilesLayout(_size, s.lanes).laneAt(e.localPosition.dx);
       _pointerLane[e.pointer] = lane;
@@ -412,8 +442,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (!_acceptsInput) return;
     final s = _session;
     if (s is CirclesSession) {
-      final t = _clock.timeMs;
-      s.update(t);
+      final t = _eventTime(e);
+      _advanceTo(t);
       final p = CirclesLayout(_size).toNorm(e.localPosition);
       _recorder.add(ReplayFrame(t, ReplayAction.move, e.pointer, p.x, p.y));
       _trails.add(e.pointer, p, t);
@@ -421,11 +451,11 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     }
   }
 
-  void _up(int pointer) {
-    final t = _clock.timeMs;
+  void _up(int pointer, [PointerEvent? e]) {
+    final t = e == null ? _clock.timeMs : _eventTime(e);
     final s = _session;
     if (req.isReplay) return;
-    if (_phase == _Phase.playing) s?.update(t);
+    if (_phase == _Phase.playing) _advanceTo(t);
     if (s is TilesSession) {
       final lane = _pointerLane.remove(pointer);
       if (lane == null) return;
@@ -510,7 +540,10 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       }
       if (_lease?.current ?? false) await _player.pause();
     }();
-    _saveScore(failed: true);
+    () async {
+      await _saveScore(failed: true);
+      if (mounted) announceMedals(context, _newMedals);
+    }();
   }
 
   Future<void> _finish() async {
@@ -518,6 +551,9 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     setState(() => _phase = _Phase.finished);
     _ticker.stop();
     final record = await _saveScore(failed: false);
+    if (req.isReplay) {
+      _newMedals = await ref.read(progressProvider.notifier).bump(Counters.replaysWatched);
+    }
     if (!mounted) return;
     final prevBest = _previousBest;
     // The music plays on under the results, as in osu!; the results screen
@@ -543,6 +579,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
           windows: _windows,
           timeline: List.of(_timeline),
           replayOf: req.replay?.player,
+          pp: record?.pp ?? (req.isReplay || mods.autoplay ? 0 : _performance(failed: false)),
+          newMedals: _newMedals,
         ),
         music: lease,
         onRetry: (ctx) => Navigator.of(ctx).pushReplacement(MaterialPageRoute(
@@ -564,6 +602,24 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   }
 
   ScoreRecord? _previousBest;
+  List<Medal> _newMedals = const [];
+
+  /// pp for the run so far (the whole run once it's over).
+  double _performance({required bool failed}) {
+    final p = _session!.processor;
+    return performancePoints(PlayFacts(
+      mode: req.map.mode,
+      stars: starRating(req.map, rate: mods.rate),
+      accuracy: p.accuracy,
+      misses: p.counts[Judgment.miss] ?? 0,
+      maxCombo: p.maxCombo,
+      mapMaxCombo: p.maxPossibleCombo,
+      objectCount: req.map.objectCount,
+      strictness: effectiveStrictness(req.map.difficulty.hitWindow, mods),
+      mods: mods,
+      failed: failed,
+    ));
+  }
 
   Future<ScoreRecord?> _saveScore({required bool failed}) async {
     final s = _session;
@@ -609,9 +665,16 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       songTitle: req.song.title,
       songArtist: req.song.artist,
       hasReplay: hasReplay,
+      pp: _performance(failed: failed),
+      mapMaxCombo: p.maxPossibleCombo,
+      objectCount: req.map.objectCount,
+      strictness: effectiveStrictness(req.map.difficulty.hitWindow, mods),
+      lanes: _tiles ? req.map.difficulty.lanes : null,
+      origin: req.map.origin,
     );
     await ref.read(scoresProvider.notifier).add(record);
     await ref.read(libraryProvider.notifier).recordPlay(req.song.id);
+    _newMedals = await ref.read(progressProvider.notifier).check();
     return record;
   }
 
@@ -664,13 +727,15 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                         frameCost: () => (_uiMs, _rasterMs),
                         practiceLoops: req.isPractice ? () => _loops : null,
                         replayOf: req.replay?.player,
+                        leftHanded: _settings.leftHanded,
                       ),
                     ),
                   ),
                 ),
               if (s != null)
                 Positioned(
-                  left: 4,
+                  left: _settings.leftHanded ? null : 4,
+                  right: _settings.leftHanded ? 4 : null,
                   top: padding.top + 4,
                   child: IconButton(
                     tooltip: 'Pause',
@@ -680,7 +745,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                 ),
               if (s != null)
                 Positioned(
-                  right: 16,
+                  right: _settings.leftHanded ? null : 16,
+                  left: _settings.leftHanded ? 16 : null,
                   bottom: padding.bottom + (_tiles ? _size.height * 0.2 : 70),
                   child: ValueListenableBuilder<bool>(
                     valueListenable: _skipVisible,
@@ -708,8 +774,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       behavior: HitTestBehavior.opaque,
       onPointerDown: _down,
       onPointerMove: _move,
-      onPointerUp: (e) => _up(e.pointer),
-      onPointerCancel: (e) => _up(e.pointer),
+      onPointerUp: (e) => _up(e.pointer, e),
+      onPointerCancel: (e) => _up(e.pointer, e),
       child: RepaintBoundary(
         child: CustomPaint(
           size: Size.infinite,
@@ -721,7 +787,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                   hidden: mods.hidden,
                   flashlight: mods.flashlight,
                   repaint: _frame,
-                  beatPulse: _beatPulse,
+                  beatPulse: _settings.reducedEffects ? () => 0 : _beatPulse,
+                  reducedEffects: _settings.reducedEffects,
                   inBreak: _inBreak,
                 )
               : CirclesPainter(
@@ -733,7 +800,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                   repaint: _frame,
                   showJudgments: _settings.judgmentDisplay != JudgmentDisplay.off,
                   trails: _trails,
-                  beatPulse: _beatPulse,
+                  beatPulse: _settings.reducedEffects ? () => 0 : _beatPulse,
+                  reducedEffects: _settings.reducedEffects,
                   inBreak: _inBreak,
                   text: _text,
                   pixelRatio: MediaQuery.devicePixelRatioOf(context),

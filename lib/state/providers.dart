@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/medals.dart';
 import '../core/models/beatmap.dart';
+import '../core/models/progress.dart';
 import '../core/models/difficulty.dart';
 import '../core/models/score.dart';
 import '../core/models/song.dart';
@@ -11,6 +13,7 @@ import '../data/pack_service.dart';
 import '../data/settings.dart';
 import '../data/storage.dart';
 import '../platform/native_bridge.dart';
+import '../ui/theme.dart';
 
 /// Everything opened at startup. Overridden in `main()`.
 class AppServices {
@@ -24,6 +27,8 @@ class AppServices {
     required this.initialScores,
     required this.initialSongs,
     required this.initialBeatmaps,
+    this.initialProgress = const Progress(),
+    this.initialCollections = const {},
   });
 
   final AppPaths paths;
@@ -35,6 +40,8 @@ class AppServices {
   final List<ScoreRecord> initialScores;
   final List<Song> initialSongs;
   final List<BeatmapSummary> initialBeatmaps;
+  final Progress initialProgress;
+  final Map<String, List<String>> initialCollections;
 }
 
 final servicesProvider = Provider<AppServices>((ref) => throw UnimplementedError('override in main'));
@@ -110,6 +117,11 @@ class LibraryNotifier extends Notifier<LibraryState> {
   Future<void> deleteBeatmap(BeatmapSummary b) async {
     await _repo.deleteBeatmap(b.songId, b.id);
     state = LibraryState(songs: state.songs, beatmaps: state.beatmaps.where((x) => x.id != b.id).toList());
+  }
+
+  Future<void> toggleFavorite(String songId) async {
+    final s = state.song(songId);
+    if (s != null) await updateSong(s.copyWith(favorite: !s.favorite));
   }
 
   /// Bumps play stats after a run.
@@ -208,14 +220,29 @@ class SettingsNotifier extends Notifier<AppSettings> {
   AppSettings build() => ref.read(servicesProvider).initialSettings;
 
   Future<void> update(AppSettings s) async {
+    final before = state;
     state = s;
+    applyDeviceSettings(s, previous: before);
     await ref.read(servicesProvider).repo.saveSettings(s);
   }
 
-  Future<void> reload() async => state = await ref.read(servicesProvider).repo.settings();
+  Future<void> reload() async {
+    final before = state;
+    state = await ref.read(servicesProvider).repo.settings();
+    applyDeviceSettings(state, previous: before);
+  }
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(SettingsNotifier.new);
+
+/// Settings that live outside Flutter's widget tree: the display refresh
+/// rate and the colour palette.
+void applyDeviceSettings(AppSettings s, {AppSettings? previous}) {
+  Palette.colorblind = s.colorblind;
+  final wantHigh = s.highRefreshRate && !s.reducedEffects;
+  final hadHigh = previous == null ? null : previous.highRefreshRate && !previous.reducedEffects;
+  if (hadHigh != wantHigh) NativeBridge.instance.setHighRefreshRate(wantHigh);
+}
 
 class ScoresNotifier extends Notifier<List<ScoreRecord>> {
   @override
@@ -254,6 +281,73 @@ class ProfileNotifier extends Notifier<PlayerProfile> {
 }
 
 final profileProvider = NotifierProvider<ProfileNotifier, PlayerProfile>(ProfileNotifier.new);
+
+/// Medals and the counters behind them.
+class ProgressNotifier extends Notifier<Progress> {
+  @override
+  Progress build() => ref.read(servicesProvider).initialProgress;
+
+  Future<void> _save(Progress p) async {
+    state = p;
+    await ref.read(servicesProvider).repo.saveProgress(p);
+  }
+
+  /// Unlocks every medal that is now earned and returns the new ones.
+  Future<List<Medal>> check() async {
+    final c = MedalContext(
+      scores: ref.read(scoresProvider),
+      songCount: ref.read(libraryProvider).songs.length,
+      counters: state.counters,
+    );
+    final earned = newlyEarned(c, state.medals.keys.toSet());
+    if (earned.isEmpty) return const [];
+    final now = DateTime.now();
+    await _save(state.copyWith(medals: {...state.medals, for (final m in earned) m.id: now}));
+    return earned;
+  }
+
+  /// Counts a moment (a watched replay, a calibration, …), then checks.
+  Future<List<Medal>> bump(String counter, [int by = 1]) async {
+    await _save(state.copyWith(counters: {...state.counters, counter: (state.counters[counter] ?? 0) + by}));
+    return check();
+  }
+
+  Future<void> reload() async => state = await ref.read(servicesProvider).repo.progress();
+}
+
+final progressProvider = NotifierProvider<ProgressNotifier, Progress>(ProgressNotifier.new);
+
+/// Named song collections.
+class CollectionsNotifier extends Notifier<Map<String, List<String>>> {
+  @override
+  Map<String, List<String>> build() => ref.read(servicesProvider).initialCollections;
+
+  Future<void> _save(Map<String, List<String>> c) async {
+    state = c;
+    await ref.read(servicesProvider).repo.saveCollections(c);
+  }
+
+  Future<void> setMembership(String songId, Set<String> names) => _save({
+        for (final e in state.entries)
+          e.key: names.contains(e.key)
+              ? {...e.value, songId}.toList()
+              : e.value.where((id) => id != songId).toList(),
+        for (final n in names)
+          if (!state.containsKey(n)) n: [songId],
+      });
+
+  Future<void> rename(String from, String to) {
+    final next = <String, List<String>>{};
+    state.forEach((k, v) => next[k == from ? to : k] = v);
+    return _save(next);
+  }
+
+  Future<void> delete(String name) => _save({...state}..remove(name));
+
+  Future<void> reload() async => state = await ref.read(servicesProvider).repo.collections();
+}
+
+final collectionsProvider = NotifierProvider<CollectionsNotifier, Map<String, List<String>>>(CollectionsNotifier.new);
 
 /// Which mode the library and song screens show.
 class ModeNotifier extends Notifier<GameMode> {

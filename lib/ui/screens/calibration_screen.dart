@@ -12,7 +12,9 @@ import '../../core/audio/pcm.dart';
 import '../../core/timing/calibration.dart';
 import '../../core/timing/song_clock.dart';
 import '../../state/providers.dart';
+import '../../core/medals.dart';
 import '../theme.dart';
+import '../widgets/medals.dart';
 
 /// Tap along to a metronome played through the same audio path as songs;
 /// the average lateness becomes the global offset.
@@ -180,8 +182,11 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> with Sing
                         : () async {
                             final s = ref.read(settingsProvider);
                             await ref.read(settingsProvider.notifier).update(s.copyWith(globalOffsetMs: est.offsetMs.roundToDouble()));
+                            final medals = await ref.read(progressProvider.notifier).bump(Counters.calibrations);
                             await _stop();
-                            if (context.mounted) Navigator.of(context).pop();
+                            if (!context.mounted) return;
+                            announceMedals(context, medals);
+                            Navigator.of(context).pop();
                           },
                     child: Text(est == null ? 'Save offset' : 'Save ${est.offsetMs >= 0 ? '+' : ''}${est.offsetMs.round()} ms'),
                   ),

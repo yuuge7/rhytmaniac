@@ -39,7 +39,6 @@ class CirclesLayout {
   double px(double widthUnits) => widthUnits * field.width;
 }
 
-const comboColors = [Palette.rose, Palette.amber, Color(0xFF8E6CF0), Palette.ember];
 
 /// Screen-space slider body, cached per object and playfield size. The
 /// thick round-capped strokes are drawn once into an image, so each frame
@@ -72,6 +71,7 @@ class CirclesPainter extends CustomPainter {
     required this.text,
     this.inBreak,
     this.pixelRatio = 2.0,
+    this.reducedEffects = false,
   }) : super(repaint: repaint);
 
   final CirclesSession session;
@@ -91,6 +91,9 @@ class CirclesPainter extends CustomPainter {
 
   /// Device pixels per logical pixel, for sharp cached slider bodies.
   final double pixelRatio;
+
+  /// No hit lighting or touch trails.
+  final bool reducedEffects;
 
   final _fill = Paint();
   final _stroke = Paint()
@@ -129,7 +132,7 @@ class CirclesPainter extends CustomPainter {
       final s = objects[i];
       final o = s.object;
       if (t - o.endMs > 260 && !(o.isSpinner && t - o.endMs < 300)) continue;
-      final color = comboColors[o.comboIndex % comboColors.length];
+      final color = Palette.combo(o.comboIndex);
       if (o.isSpinner) {
         _spinner(canvas, layout, s, t);
         continue;
@@ -170,7 +173,7 @@ class CirclesPainter extends CustomPainter {
       }
     }
 
-    _hitLighting(canvas, layout, t, r);
+    if (!reducedEffects) _hitLighting(canvas, layout, t, r);
     if (showJudgments) _judgments(canvas, layout, t, r);
     _trails(canvas, layout, t, r);
     if (flashlight) _flashlight(canvas, size, layout, t, r);
@@ -432,7 +435,7 @@ class CirclesPainter extends CustomPainter {
       tr.prune(t, keep);
       return tr.points.isEmpty;
     });
-    for (final tr in trails.trails.values) {
+    for (final tr in reducedEffects ? const <Trail>[] : trails.trails.values) {
       final pts = tr.points;
       for (var i = 1; i < pts.length; i++) {
         final k = 1 - (t - pts[i].$2) / keep;

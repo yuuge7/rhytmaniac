@@ -5,6 +5,7 @@ import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/models/beatmap.dart';
+import '../core/models/progress.dart';
 import '../core/models/score.dart';
 import '../core/models/song.dart';
 import '../core/util/ids.dart';
@@ -91,7 +92,10 @@ class PackService {
     required List<ScoreRecord> scores,
     required List<Song> songs,
     required bool includeLibrary,
+    Progress progress = const Progress(),
+    Map<String, List<String>> collections = const {},
   }) async {
+    final hashById = {for (final s in songs) s.id: s.contentHash};
     final stamp = DateTime.now().toIso8601String().substring(0, 10);
     final out = await _tmpZip('${safeName(profile.name)}_$stamp.rhprofile.zip');
     final zip = ZipFileEncoder()..create(out);
@@ -113,6 +117,11 @@ class PackService {
         'player': profile.toJson(),
         'settings': settings.portableJson(),
         'scores': scores.map((s) => s.toJson()).toList(),
+        'progress': progress.toJson(),
+        // Songs are named by audio hash so collections survive new ids.
+        'collections': {
+          for (final e in collections.entries) e.key: [for (final id in e.value) if (hashById[id] != null) hashById[id]],
+        },
         'songStats': songs
             .map((s) => {
                   'contentHash': s.contentHash,
@@ -239,6 +248,19 @@ class PackService {
         return ScoreRecord.fromJson({...s.toJson(), 'songId': local.id});
       });
       final added = await repo.addScoresIfMissing(scores);
+
+      final incomingProgress = Progress.fromJson((profileJson['progress'] as Map?)?.cast<String, dynamic>());
+      await repo.saveProgress((await repo.progress()).merge(incomingProgress));
+
+      final collections = await repo.collections();
+      ((profileJson['collections'] as Map?) ?? const {}).forEach((name, hashes) {
+        final ids = [
+          for (final h in (hashes as List))
+            if (localByHash[h] != null) localByHash[h]!.id,
+        ];
+        collections[name as String] = {...?collections[name], ...ids}.toList();
+      });
+      await repo.saveCollections(collections);
 
       for (final raw in profileJson['songStats'] as List? ?? const []) {
         final st = (raw as Map).cast<String, dynamic>();

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/medals.dart';
 import '../../core/models/difficulty.dart';
 import '../../core/models/score.dart';
 import '../../core/profile_stats.dart';
@@ -12,6 +13,7 @@ import '../../state/providers.dart';
 import '../export_flow.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/medals.dart';
 import '../widgets/signal_strip.dart';
 import 'song_screen.dart';
 
@@ -71,6 +73,8 @@ class ProfileScreen extends ConsumerWidget {
         scores: ref.read(scoresProvider),
         songs: ref.read(libraryProvider).songs,
         includeLibrary: includeLibrary,
+        progress: ref.read(progressProvider),
+        collections: ref.read(collectionsProvider),
       );
       if (context.mounted) await saveExport(context, ref, path);
     } catch (e) {
@@ -90,6 +94,8 @@ class ProfileScreen extends ConsumerWidget {
       await ref.read(scoresProvider.notifier).reload();
       await ref.read(settingsProvider.notifier).reload();
       await ref.read(profileProvider.notifier).reload();
+      await ref.read(progressProvider.notifier).reload();
+      await ref.read(collectionsProvider.notifier).reload();
       if (context.mounted) {
         showMessage(context,
             'Profile imported: ${r.scoresAdded} new score${r.scoresAdded == 1 ? '' : 's'}${r.songsAdded > 0 ? ', ${r.songsAdded} songs' : ''}');
@@ -107,6 +113,7 @@ class ProfileScreen extends ConsumerWidget {
     final scores = ref.watch(scoresProvider);
     final lib = ref.watch(libraryProvider);
     final stats = ProfileStats.compute(scores);
+    final progress = ref.watch(progressProvider);
 
     return SafeArea(
       bottom: false,
@@ -157,20 +164,20 @@ class ProfileScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 26),
-          // Pulse hero.
+          // Performance hero.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text(stats.pulse.round().toString(), style: AppText.display(64, width: 150, weight: 900, color: Palette.flare, letterSpacing: -2)),
+                Text(stats.pp.round().toString(), style: AppText.display(64, width: 150, weight: 900, color: Palette.flare, letterSpacing: -2)),
                 const SizedBox(width: 10),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('PULSE', style: AppText.label(color: Palette.amber)),
+                    Text('PP', style: AppText.label(color: Palette.amber)),
                     const SizedBox(height: 2),
-                    Text('from your best plays', style: AppText.body(12, color: Palette.mist)),
+                    Text('performance from your best plays', style: AppText.body(12, color: Palette.mist)),
                   ]),
                 ),
               ],
@@ -182,7 +189,7 @@ class ProfileScreen extends ConsumerWidget {
               for (final m in GameMode.values) ...[
                 Text(m.label, style: AppText.body(13, color: Palette.mist)),
                 const SizedBox(width: 6),
-                Text('${stats.pulseByMode[m]!.round()}', style: AppText.data(13, weight: 650, color: Palette.bone)),
+                Text('${stats.ppByMode[m]!.round()}pp', style: AppText.data(13, weight: 650, color: Palette.bone)),
                 const SizedBox(width: 18),
               ],
             ]),
@@ -206,6 +213,11 @@ class ProfileScreen extends ConsumerWidget {
                   ]),
               ],
             ),
+          ),
+          SectionLabel('Medals · ${progress.medals.length} of ${allMedals.length}'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+            child: MedalGrid(unlocked: progress.medals),
           ),
           if (stats.accuracyTrend.length >= 2) ...[
             const SectionLabel('Accuracy, last plays'),
@@ -232,7 +244,7 @@ class ProfileScreen extends ConsumerWidget {
               child: Text('Finish a song to start your list. Autoplay and practice runs don’t count.',
                   style: AppText.body(14, color: Palette.mist)),
             ),
-          for (final (i, s) in stats.bestPlays.indexed) _PlayRow(score: s, rank: i + 1, showPulse: true),
+          for (final (i, s) in stats.bestPlays.indexed) _PlayRow(score: s, rank: i + 1, showPp: true),
           if (stats.recent.isNotEmpty) ...[
             const SectionLabel('Recent'),
             for (final s in stats.recent) _PlayRow(score: s),
@@ -412,10 +424,10 @@ class _MostPlayedRow extends StatelessWidget {
 }
 
 class _PlayRow extends StatelessWidget {
-  const _PlayRow({required this.score, this.rank, this.showPulse = false});
+  const _PlayRow({required this.score, this.rank, this.showPp = false});
   final ScoreRecord score;
   final int? rank;
-  final bool showPulse;
+  final bool showPp;
 
   @override
   Widget build(BuildContext context) {
@@ -446,7 +458,7 @@ class _PlayRow extends StatelessWidget {
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             StarBadge(s.stars, compact: true),
             const SizedBox(height: 3),
-            Text(showPulse ? '${s.pulse.round()} pulse' : formatAgo(s.timestamp), style: AppText.data(10.5)),
+            Text(showPp ? '${s.performance.round()} pp' : formatAgo(s.timestamp), style: AppText.data(10.5)),
           ]),
         ],
       ),

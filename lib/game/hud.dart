@@ -56,6 +56,7 @@ class HudPainter extends CustomPainter {
     required this.frameCost,
     this.practiceLoops,
     this.replayOf,
+    this.leftHanded = false,
   }) : super(repaint: repaint);
 
   final HudController controller;
@@ -76,6 +77,9 @@ class HudPainter extends CustomPainter {
   /// Player name when watching a replay.
   final String? replayOf;
 
+  /// Score on the left, pause button on the right, combo bottom-right.
+  final bool leftHanded;
+
   final _fill = Paint();
 
   @override
@@ -85,21 +89,20 @@ class HudPainter extends CustomPainter {
     final tiles = mode == GameMode.tiles;
     final top = padding.top + 4;
 
-    // Score, accuracy and mods, top right.
+    // Score, accuracy and mods: top right (top left when left-handed).
     final score = text.data(p.score.toString().padLeft(8, '0'), 19, Palette.bone, weight: 600);
-    final right = size.width - 14;
-    score.paint(canvas, Offset(right - score.width, top + 6));
     final acc = text.data('${(p.accuracy * 100).toStringAsFixed(2)}%', 12.5, Palette.mist);
-    acc.paint(canvas, Offset(right - acc.width, top + 6 + score.height + 2));
     final modsLine = mods.acronyms.where((m) => m != 'AT').join(' ');
-    if (modsLine.isNotEmpty) {
-      final m = text.data(modsLine, 10.5, Palette.amber, weight: 600);
-      m.paint(canvas, Offset(right - m.width, top + 6 + score.height + acc.height + 4));
-    }
+    final modsText = modsLine.isEmpty ? null : text.data(modsLine, 10.5, Palette.amber, weight: 600);
+    double xFor(TextPainter tp) => leftHanded ? 14 : size.width - 14 - tp.width;
+    score.paint(canvas, Offset(xFor(score), top + 6));
+    acc.paint(canvas, Offset(xFor(acc), top + 6 + score.height + 2));
+    modsText?.paint(canvas, Offset(xFor(modsText), top + 6 + score.height + acc.height + 4));
 
     // Progress and health bars between the pause button and the score.
-    final barLeft = 60.0;
-    final barRight = right - math.max(score.width, 92) - 16;
+    final scoreBlock = math.max(score.width, 92.0) + 16;
+    final double barLeft = leftHanded ? 14.0 + scoreBlock : 60.0;
+    final double barRight = leftHanded ? size.width - 60 : size.width - 14 - scoreBlock;
     if (barRight > barLeft + 20) {
       _bar(canvas, Rect.fromLTWH(barLeft, top + 16, barRight - barLeft, 2), (t / math.max(1, songEndMs)).clamp(0.0, 1.0), Palette.mist);
       final h = controller.health.clamp(0.0, 1.0);
@@ -107,7 +110,7 @@ class HudPainter extends CustomPainter {
           h < 0.3 ? Palette.danger : Palette.heat(0.45 + 0.5 * h));
     }
 
-    var infoY = top + 54;
+    var infoY = leftHanded ? top + 78 : top + 54;
     if (settings.showFps) {
       final (ui, raster) = frameCost();
       final a = text.data('${fps().round()} fps · drift ${drift().toStringAsFixed(1)} ms', 11, Palette.amber);
@@ -137,7 +140,8 @@ class HudPainter extends CustomPainter {
       final sx = 1 + 0.16 * step, sy = 1 + 0.05 * step;
       final anchor = tiles
           ? Offset(size.width / 2, size.height * 0.30 + label.height / 2)
-          : Offset(18 + label.width / 2, size.height - padding.bottom - 18 - label.height / 2);
+          : Offset(leftHanded ? size.width - 18 - label.width / 2 : 18 + label.width / 2,
+              size.height - padding.bottom - 18 - label.height / 2);
       canvas.save();
       canvas.translate(anchor.dx, anchor.dy);
       canvas.scale(sx, sy);
@@ -189,9 +193,9 @@ class HudPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTRB(cx - ms * scale, cy - 1.5, cx + ms * scale, cy + 1.5), _fill);
     }
 
-    zone(w.good, Palette.rose);
-    zone(w.great, Palette.amber);
-    zone(w.perfect, Palette.flare);
+    zone(w.good, Palette.judgment(Judgment.good));
+    zone(w.great, Palette.judgment(Judgment.great));
+    zone(w.perfect, Palette.judgment(Judgment.perfect));
     _fill.color = Palette.bone;
     canvas.drawRect(Rect.fromLTWH(cx - 1, r.top, 2, r.height), _fill);
     final n = errors.length;

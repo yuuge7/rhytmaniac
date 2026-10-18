@@ -78,7 +78,7 @@ void main() {
     expect(const Mods(rate: 1.5, hidden: true).labels, ['1.5×', 'Hidden']);
   });
 
-  test('profile stats: best per map, pulse weighting, streak', () {
+  test('profile stats: best per map, pp weighting, streak', () {
     final now = DateTime(2026, 10, 16, 18);
     final stats = ProfileStats.compute([
       rec('1', acc: 0.90, at: DateTime(2026, 10, 14)),
@@ -90,7 +90,7 @@ void main() {
     expect(stats.bestPlays, hasLength(2));
     expect(stats.bestPlays.first.stars, 5);
     expect(stats.streakDays, 3);
-    expect(stats.pulse, greaterThan(stats.bestPlays.first.pulse));
+    expect(stats.pp, greaterThan(stats.bestPlays.first.performance));
     expect(stats.accuracyTrend, hasLength(3));
   });
 

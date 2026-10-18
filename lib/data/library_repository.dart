@@ -5,6 +5,7 @@ import 'package:sembast/sembast.dart';
 
 import '../core/models/analysis.dart';
 import '../core/models/beatmap.dart';
+import '../core/models/progress.dart';
 import '../core/models/replay.dart';
 import '../core/models/score.dart';
 import '../core/models/song.dart';
@@ -150,4 +151,23 @@ class LibraryRepository {
   }
 
   Future<void> saveProfile(PlayerProfile p) => database.kv.record('profile').put(_db, p.toJson());
+
+  Future<Progress> progress() async {
+    final v = await database.kv.record('progress').get(_db);
+    return Progress.fromJson(v == null ? null : Map<String, dynamic>.from(v));
+  }
+
+  Future<void> saveProgress(Progress p) => database.kv.record('progress').put(_db, p.toJson());
+
+  /// Named song collections: `{ name: [songId, …] }`.
+  Future<Map<String, List<String>>> collections() async {
+    final v = await database.kv.record('collections').get(_db);
+    if (v == null) return {};
+    return {
+      for (final e in Map<String, dynamic>.from(v).entries)
+        e.key: (e.value as List).map((x) => x as String).toList(),
+    };
+  }
+
+  Future<void> saveCollections(Map<String, List<String>> c) => database.kv.record('collections').put(_db, c);
 }

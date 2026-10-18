@@ -13,8 +13,10 @@ import '../../core/rating/star_rating.dart';
 import '../../state/providers.dart';
 import '../export_flow.dart';
 import '../routes.dart';
+import '../../core/medals.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/medals.dart';
 import '../widgets/signal_strip.dart';
 import 'analysis_screen.dart';
 import 'editor_screen.dart';
@@ -233,6 +235,8 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
     if (map != null) {
       await ref.read(libraryProvider.notifier).saveBeatmap(map);
       setState(() => _selectedId = map.id);
+      final medals = await ref.read(progressProvider.notifier).bump(Counters.mapsGenerated);
+      if (mounted) announceMedals(context, medals);
     }
   }
 
@@ -260,6 +264,60 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
             artist: artist.text.trim(),
           ));
     }
+  }
+
+  /// Pick which collections hold this song; new ones can be made here.
+  Future<void> _collections(Song song) async {
+    final all = ref.read(collectionsProvider);
+    final names = all.keys.toList()..sort();
+    final chosen = {for (final n in names) if (all[n]!.contains(song.id)) n};
+    final newName = TextEditingController();
+    final r = await showDialog<Set<String>>(
+      context: context,
+      builder: (c) => StatefulBuilder(builder: (c, set) {
+        return AlertDialog(
+          title: const Text('Collections'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (names.isEmpty)
+                Text('No collections yet. Name one below.', style: AppText.body(13.5, color: Palette.mist)),
+              for (final n in names)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: chosen.contains(n),
+                  onChanged: (v) => set(() => v == true ? chosen.add(n) : chosen.remove(n)),
+                  title: Text(n),
+                ),
+              TextField(
+                controller: newName,
+                decoration: const InputDecoration(hintText: 'New collection'),
+                onSubmitted: (v) {
+                  final n = v.trim();
+                  if (n.isEmpty) return;
+                  set(() {
+                    if (!names.contains(n)) names.add(n);
+                    chosen.add(n);
+                    newName.clear();
+                  });
+                },
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () {
+                final n = newName.text.trim();
+                if (n.isNotEmpty) chosen.add(n);
+                Navigator.pop(c, chosen);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (r != null) await ref.read(collectionsProvider.notifier).setMembership(song.id, r);
   }
 
   Future<void> _songOffset(Song song) async {
@@ -334,12 +392,20 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
     return Scaffold(
       appBar: AppBar(
         actions: [
+          IconButton(
+            tooltip: song.favorite ? 'Remove from favorites' : 'Add to favorites',
+            onPressed: () => ref.read(libraryProvider.notifier).toggleFavorite(song.id),
+            icon: Icon(song.favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+                color: song.favorite ? Palette.amber : null),
+          ),
           PopupMenuButton<String>(
             color: Palette.raised,
             onSelected: (v) async {
               switch (v) {
                 case 'info':
                   await _editInfo(song);
+                case 'collections':
+                  await _collections(song);
                 case 'offset':
                   await _songOffset(song);
                 case 'analysis':
@@ -356,6 +422,7 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(value: 'collections', child: Text('Add to collection…')),
               PopupMenuItem(value: 'info', child: Text('Edit title and artist')),
               PopupMenuItem(value: 'offset', child: Text('Song offset')),
               PopupMenuItem(value: 'analysis', child: Text('Beat analysis')),
@@ -637,7 +704,7 @@ extension on _DifficultyRow {
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            '${formatScore(s.score)} · ${(s.accuracy * 100).toStringAsFixed(2)}% · ${s.maxCombo}×${s.mods.acronyms.isEmpty ? '' : ' · ${s.mods.acronyms.join('')}'}',
+            '${formatScore(s.score)} · ${(s.accuracy * 100).toStringAsFixed(2)}% · ${s.maxCombo}× · ${s.performance.round()}pp${s.mods.acronyms.isEmpty ? '' : ' · ${s.mods.acronyms.join('')}'}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppText.data(11, color: Palette.bone),

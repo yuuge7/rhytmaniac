@@ -19,7 +19,9 @@ import '../../state/providers.dart';
 import '../editor/circles_editor_view.dart';
 import '../editor/editor_state.dart';
 import '../editor/tiles_editor_view.dart';
+import '../../core/medals.dart';
 import '../theme.dart';
+import '../widgets/medals.dart';
 import '../widgets/common.dart';
 import 'play_screen.dart';
 
@@ -144,7 +146,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
     final rated = saved.copyWith(starRating: starRating(saved));
     await ref.read(libraryProvider.notifier).saveBeatmap(rated);
     ed.markSaved(rated);
-    if (mounted) showMessage(context, 'Saved “${rated.name}” · ${rated.starRating.toStringAsFixed(2)}★');
+    final medals = await ref.read(progressProvider.notifier).bump(Counters.mapsEdited);
+    if (!mounted) return;
+    showMessage(context, 'Saved “${rated.name}” · ${rated.starRating.toStringAsFixed(2)}★');
+    announceMedals(context, medals);
   }
 
   Future<void> _regenerate() async {

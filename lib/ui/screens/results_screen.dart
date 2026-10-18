@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../audio/app_audio.dart';
+import '../../core/medals.dart';
 import '../../core/models/beatmap.dart';
 import '../../core/models/difficulty.dart';
 import '../../core/models/score.dart';
@@ -13,6 +14,7 @@ import '../../core/scoring/score_processor.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import '../widgets/medals.dart';
 
 /// One sample of how the run was going, for the results graph.
 class RunSample {
@@ -34,6 +36,8 @@ class RunResult {
     this.previousBest,
     this.timeline = const [],
     this.replayOf,
+    this.pp = 0,
+    this.newMedals = const [],
   });
 
   final Song song;
@@ -48,6 +52,12 @@ class RunResult {
 
   /// Set when this was a replay: whose run it was.
   final String? replayOf;
+
+  /// Performance points for this run.
+  final double pp;
+
+  /// Medals this run unlocked.
+  final List<Medal> newMedals;
 
   bool get isNewBest => record != null && (previousBest == null || record!.score > previousBest!.score);
 }
@@ -139,10 +149,35 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
                 Row(children: [
                   Expanded(child: _stat('Accuracy', '${(p.accuracy * 100).toStringAsFixed(2)}%')),
                   Expanded(child: _stat('Max combo', '${p.maxCombo} / $total')),
+                  if (r.pp > 0) Expanded(child: _stat('Performance', '${r.pp.round()} pp')),
                 ]),
               ],
             ),
           ),
+          for (final m in r.newMedals)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Palette.surface,
+                  borderRadius: BorderRadius.circular(Space.radius),
+                  border: Border.all(color: medalColor(m.group).withValues(alpha: 0.6)),
+                ),
+                child: Row(children: [
+                  MedalBadge(medal: m, unlocked: true, size: 46),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('MEDAL UNLOCKED', style: AppText.label(color: medalColor(m.group))),
+                      const SizedBox(height: 2),
+                      Text(m.title, style: AppText.display(18, width: 110, weight: 780)),
+                      Text(m.description, style: AppText.body(12.5, color: Palette.mist)),
+                    ]),
+                  ),
+                ]),
+              ),
+            ),
           const SectionLabel('Judgments', padding: EdgeInsets.fromLTRB(0, 22, 0, 10)),
           _JudgmentBars(counts: p.counts),
           if (p.ticksHit + p.ticksMissed > 0) ...[

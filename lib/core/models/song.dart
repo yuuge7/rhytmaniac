@@ -23,6 +23,7 @@ class Song {
     this.fingerprint = const [],
     this.isDemo = false,
     this.previewMs,
+    this.favorite = false,
   });
 
   final String id;
@@ -53,6 +54,9 @@ class Song {
 
   double get previewStartMs => previewMs ?? durationMs * 0.4;
 
+  /// Starred by the player.
+  final bool favorite;
+
   Song copyWith({
     String? title,
     String? artist,
@@ -66,6 +70,7 @@ class Song {
     AnalysisStatus? status,
     List<List<double>>? fingerprint,
     double? previewMs,
+    bool? favorite,
   }) =>
       Song(
         id: id,
@@ -85,6 +90,7 @@ class Song {
         fingerprint: fingerprint ?? this.fingerprint,
         isDemo: isDemo,
         previewMs: previewMs ?? this.previewMs,
+        favorite: favorite ?? this.favorite,
       );
 
   Map<String, dynamic> toJson() => {
@@ -105,6 +111,7 @@ class Song {
         'fingerprint': fingerprint,
         'isDemo': isDemo,
         if (previewMs != null) 'previewMs': previewMs,
+        if (favorite) 'favorite': true,
       };
 
   factory Song.fromJson(Map<String, dynamic> j) => Song(
@@ -127,6 +134,7 @@ class Song {
             .toList(),
         isDemo: j['isDemo'] as bool? ?? false,
         previewMs: (j['previewMs'] as num?)?.toDouble(),
+        favorite: j['favorite'] as bool? ?? false,
       );
 }
 

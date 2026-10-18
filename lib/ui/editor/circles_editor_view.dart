@@ -226,7 +226,7 @@ class _PlayfieldPainter extends CustomPainter {
     }
     for (final i in visible.reversed) {
       final o = objects[i];
-      final color = comboColors[o.comboIndex % comboColors.length];
+      final color = Palette.combo(o.comboIndex);
       final dt = o.timeMs - ed.timeMs;
       final current = dt.abs() < 2 || (ed.timeMs >= o.timeMs && ed.timeMs <= o.endMs);
       final alpha = dt > 0 ? (1 - dt / approach).clamp(0.25, 1.0) : (current ? 1.0 : 0.4);
@@ -338,7 +338,7 @@ class _TimelinePainter extends CustomPainter {
     for (final o in ed.map.circleObjects) {
       if (o.endMs < t0) continue;
       if (o.timeMs > t1) break;
-      final c = comboColors[o.comboIndex % comboColors.length];
+      final c = Palette.combo(o.comboIndex);
       p.color = c;
       if (o.isSlider || o.isSpinner) {
         canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTRB(x(o.timeMs), y - 4, x(o.endMs), y + 4), const Radius.circular(4)), p);

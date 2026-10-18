@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,6 +8,7 @@ import '../../core/models/song.dart';
 import '../../data/import_service.dart';
 import '../../platform/native_bridge.dart';
 import '../../state/providers.dart';
+import '../import_flow.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import '../widgets/signal_strip.dart';
@@ -35,14 +38,21 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   String _query = '';
   bool _searching = false;
 
+  /// Shelf: null = all songs, [_favorites] or a collection name.
+  String? _shelf;
+  static const _favorites = '\u0000favorites';
+
+  /// Filters: stars of the song's maps in the current mode, length in minutes.
+  RangeValues _stars = const RangeValues(0, _maxStars);
+  RangeValues _minutes = const RangeValues(0, _maxMinutes);
+  static const _maxStars = 8.0;
+  static const _maxMinutes = 10.0;
+
+  bool get _filtering => _stars != const RangeValues(0, _maxStars) || _minutes != const RangeValues(0, _maxMinutes);
+
   Future<void> _import() async {
-    try {
-      final file = await NativeBridge.instance.pickFile(importMimeTypes);
-      if (file == null) return;
-      await ref.read(importProvider.notifier).importPicked(file);
-    } catch (e) {
-      if (mounted) showMessage(context, 'Could not open the file: $e');
-    }
+    final file = await NativeBridge.instance.pickFile(importMimeTypes);
+    if (file != null && mounted) await importSongFile(context, ref, file);
   }
 
   /// Lets the player choose what kind of file to bring in.
@@ -88,50 +98,33 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   }
 
   Future<void> _importOsz() async {
-    try {
-      // .osz has no registered type on most phones, so show every file.
-      final file = await NativeBridge.instance.pickFile(const ['*/*']);
-      if (file == null) return;
-      final r = await ref.read(importProvider.notifier).importOsz(file);
-      if (r == null || !mounted) return;
-      final n = r.added.length;
-      final skipped = r.skipped.isEmpty ? '' : ' Skipped ${r.skipped.length}: ${r.skipped.map((s) => '${s.version} (${s.reason})').join(', ')}.';
-      showMessage(
-        context,
-        n == 0
-            ? 'No playable difficulties in this set.$skipped'
-            : 'Added $n osu! difficult${n == 1 ? 'y' : 'ies'} to “${r.song.title}”.$skipped',
-      );
-    } catch (e) {
-      if (mounted) showMessage(context, 'Could not open the file: $e');
-    }
+    // .osz has no registered type on most phones, so show every file.
+    final file = await NativeBridge.instance.pickFile(const ['*/*']);
+    if (file != null && mounted) await importOszFile(context, ref, file);
   }
 
   Future<void> _importPack() async {
-    try {
-      final file = await NativeBridge.instance.pickFile(const ['application/zip', 'application/octet-stream']);
-      if (file == null) return;
-      final services = ref.read(servicesProvider);
-      final tmp = '${services.paths.tmpDir}/incoming_${DateTime.now().millisecondsSinceEpoch}.zip';
-      await NativeBridge.instance.copyUri(file.uri, tmp);
-      final r = await services.packs.importSongPack(tmp);
-      await ref.read(libraryProvider.notifier).refresh();
-      if (mounted) {
-        showMessage(context, r.songsAdded == 0 && r.mapsAdded == 0
-            ? 'Nothing new in this pack'
-            : 'Added ${r.songsAdded} song${r.songsAdded == 1 ? '' : 's'} and ${r.mapsAdded} difficult${r.mapsAdded == 1 ? 'y' : 'ies'}');
-      }
-    } on FormatException catch (e) {
-      if (mounted) showMessage(context, e.message);
-    } catch (e) {
-      if (mounted) showMessage(context, 'Could not import the pack: $e');
+    final file = await NativeBridge.instance.pickFile(const ['application/zip', 'application/octet-stream']);
+    if (file != null && mounted) await importPackFile(context, ref, file);
+  }
+
+  bool _passesFilters(LibraryState lib, Song s, GameMode mode) {
+    if (_shelf == _favorites && !s.favorite) return false;
+    if (_shelf != null && _shelf != _favorites && !(ref.read(collectionsProvider)[_shelf]?.contains(s.id) ?? false)) return false;
+    final minutes = s.durationMs / 60000;
+    if (minutes < _minutes.start || (_minutes.end < _maxMinutes && minutes > _minutes.end)) return false;
+    if (_stars != const RangeValues(0, _maxStars)) {
+      final hi = _stars.end >= _maxStars ? double.infinity : _stars.end;
+      if (!lib.mapsFor(s.id, mode).any((m) => m.stars >= _stars.start && m.stars <= hi)) return false;
     }
+    return true;
   }
 
   List<Song> _sorted(LibraryState lib, GameMode mode) {
     final q = _query.trim().toLowerCase();
     final list = lib.songs
         .where((s) => q.isEmpty || s.title.toLowerCase().contains(q) || s.artist.toLowerCase().contains(q))
+        .where((s) => _passesFilters(lib, s, mode))
         .toList();
     int cmp(Song a, Song b) => switch (_sort) {
           LibrarySort.added => a.addedAt.compareTo(b.addedAt),
@@ -175,6 +168,30 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                   child: Text('No songs match “$_query”.', style: AppText.body(15, color: Palette.mist), textAlign: TextAlign.center),
                 ),
               )
+            else if (songs.isEmpty)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(children: [
+                    Text(
+                      _shelf == _favorites && !_filtering
+                          ? 'No favorites yet. Star a song on its page.'
+                          : 'No songs here with these filters.',
+                      style: AppText.body(15, color: Palette.mist),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () => setState(() {
+                        _shelf = null;
+                        _stars = const RangeValues(0, _maxStars);
+                        _minutes = const RangeValues(0, _maxMinutes);
+                      }),
+                      child: const Text('Show all songs'),
+                    ),
+                  ]),
+                ),
+              )
             else
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(Space.gutter, 4, Space.gutter, 96),
@@ -204,6 +221,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                   alignment: Alignment.centerLeft,
                   child: Text('Rhytmaniac', style: AppText.display(30, width: 150, weight: 850, letterSpacing: -1)),
                 ),
+              ),
+              IconButton(
+                tooltip: 'Random song',
+                onPressed: lib.songs.isEmpty ? null : () => _random(lib, mode),
+                icon: const Icon(Icons.shuffle_rounded),
               ),
               IconButton(
                 tooltip: 'Search',
@@ -250,6 +272,16 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             children: [
               ModeSwitch(mode: mode, onChanged: (m) => ref.read(modeProvider.notifier).set(m)),
               const Spacer(),
+              IconButton(
+                tooltip: 'Filters',
+                onPressed: _openFilters,
+                icon: Badge(
+                  isLabelVisible: _filtering,
+                  backgroundColor: Palette.amber,
+                  smallSize: 7,
+                  child: const Icon(Icons.filter_list_rounded),
+                ),
+              ),
               PopupMenuButton<LibrarySort>(
                 tooltip: 'Sort',
                 color: Palette.raised,
@@ -282,10 +314,123 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          _shelves(lib),
           const SizedBox(height: 6),
         ],
       ),
     );
+  }
+
+  /// All songs, favorites and the player's collections.
+  Widget _shelves(LibraryState lib) {
+    final collections = ref.watch(collectionsProvider);
+    final names = collections.keys.toList()..sort();
+    if (names.isEmpty && !lib.songs.any((s) => s.favorite) && _shelf == null) return const SizedBox.shrink();
+    Widget chip(String label, String? value, {IconData? icon}) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: GestureDetector(
+            onLongPress: value == null || value == _favorites ? null : () => _editCollection(value),
+            child: ChoiceChip(
+              avatar: icon == null ? null : Icon(icon, size: 16),
+              label: Text(label),
+              selected: _shelf == value,
+              onSelected: (_) => setState(() => _shelf = value),
+            ),
+          ),
+        );
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        chip('All', null),
+        chip('Favorites', _favorites, icon: Icons.star_rounded),
+        for (final n in names) chip('$n · ${collections[n]!.length}', n),
+      ]),
+    );
+  }
+
+  Future<void> _editCollection(String name) async {
+    final c = TextEditingController(text: name);
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Collection'),
+        content: TextField(controller: c, autofocus: true, decoration: const InputDecoration(hintText: 'Name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, 'delete'), child: const Text('Delete')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, 'rename'), child: const Text('Rename')),
+        ],
+      ),
+    );
+    final notifier = ref.read(collectionsProvider.notifier);
+    if (r == 'delete') {
+      await notifier.delete(name);
+      if (_shelf == name) setState(() => _shelf = null);
+    } else if (r == 'rename' && c.text.trim().isNotEmpty && c.text.trim() != name) {
+      await notifier.rename(name, c.text.trim());
+      if (_shelf == name) setState(() => _shelf = c.text.trim());
+    }
+  }
+
+  Future<void> _openFilters() async {
+    var stars = _stars, minutes = _minutes;
+    String fmtStars(double v) => v >= _maxStars ? '${_maxStars.round()}+★' : '${v.toStringAsFixed(1)}★';
+    String fmtMin(double v) => v >= _maxMinutes ? '${_maxMinutes.round()}+ min' : '${v.toStringAsFixed(1)} min';
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (c) => StatefulBuilder(builder: (c, set) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, 12),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Filters', style: AppText.display(22, width: 120, weight: 800)),
+              const SizedBox(height: 14),
+              Row(children: [
+                Text('Stars', style: AppText.body(15, weight: 600)),
+                const Spacer(),
+                Text('${fmtStars(stars.start)} – ${fmtStars(stars.end)}', style: AppText.data(13, color: Palette.bone)),
+              ]),
+              RangeSlider(values: stars, min: 0, max: _maxStars, divisions: 32, onChanged: (v) => set(() => stars = v)),
+              Text('A song shows when one of its maps in this mode is in range.', style: AppText.body(12, color: Palette.mist)),
+              const SizedBox(height: 14),
+              Row(children: [
+                Text('Length', style: AppText.body(15, weight: 600)),
+                const Spacer(),
+                Text('${fmtMin(minutes.start)} – ${fmtMin(minutes.end)}', style: AppText.data(13, color: Palette.bone)),
+              ]),
+              RangeSlider(values: minutes, min: 0, max: _maxMinutes, divisions: 20, onChanged: (v) => set(() => minutes = v)),
+              const SizedBox(height: 8),
+              Row(children: [
+                TextButton(
+                  onPressed: () => set(() {
+                    stars = const RangeValues(0, _maxStars);
+                    minutes = const RangeValues(0, _maxMinutes);
+                  }),
+                  child: const Text('Reset'),
+                ),
+                const Spacer(),
+                FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Apply')),
+              ]),
+            ]),
+          ),
+        );
+      }),
+    );
+    if (ok == true) {
+      setState(() {
+        _stars = stars;
+        _minutes = minutes;
+      });
+    }
+  }
+
+  /// Opens a random song from what the library currently shows.
+  void _random(LibraryState lib, GameMode mode) {
+    final pool = _sorted(lib, mode);
+    final from = pool.isEmpty ? lib.songs : pool;
+    final song = from[math.Random().nextInt(from.length)];
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => SongScreen(songId: song.id)));
   }
 }
 
@@ -318,7 +463,16 @@ class _SongCard extends ConsumerWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.display(17, width: 108, weight: 720, letterSpacing: -0.2)),
+                        Row(children: [
+                          if (song.favorite) ...[
+                            const Icon(Icons.star_rounded, size: 16, color: Palette.amber),
+                            const SizedBox(width: 4),
+                          ],
+                          Flexible(
+                            child: Text(song.title,
+                                maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.display(17, width: 108, weight: 720, letterSpacing: -0.2)),
+                          ),
+                        ]),
                         const SizedBox(height: 3),
                         Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.body(13, color: Palette.mist)),
                       ],

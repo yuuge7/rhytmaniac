@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../core/gameplay/session.dart';
 import '../core/gameplay/tiles_session.dart';
 import '../core/models/score.dart';
 import '../ui/theme.dart';
@@ -33,8 +34,7 @@ class TilesLayout {
 
   double laneCenter(int lane) => field.left + laneWidth * (lane + 0.5);
 
-  static Color laneColor(int lane, int lanes) =>
-      Palette.heat(0.34 + 0.6 * (lanes <= 1 ? 0.5 : lane / (lanes - 1)));
+  static Color laneColor(int lane, int lanes) => Palette.lane(lane, lanes);
 }
 
 class TilesPainter extends CustomPainter {
@@ -48,6 +48,7 @@ class TilesPainter extends CustomPainter {
     required this.beatPulse,
     this.backgroundAlpha = 0.86,
     this.inBreak,
+    this.reducedEffects = false,
   }) : super(repaint: repaint);
 
   final TilesSession session;
@@ -64,6 +65,9 @@ class TilesPainter extends CustomPainter {
   /// 0..1: how strongly to pulse on this beat (kiai sections).
   final double Function() beatPulse;
   final bool Function()? inBreak;
+
+  /// No light beams on hits.
+  final bool reducedEffects;
 
   final _fill = Paint();
   final _stroke = Paint()..style = PaintingStyle.stroke;
@@ -109,7 +113,7 @@ class TilesPainter extends CustomPainter {
     }
 
     // Column lighting: a beam rises from the hit line on every hit.
-    for (final fb in session.feedback.reversed) {
+    for (final fb in reducedEffects ? const <HitFeedback>[] : session.feedback.reversed) {
       final age = t - fb.timeMs;
       if (age > 260) break;
       if (fb.judgment == Judgment.miss || fb.lane == null || age < 0 || fb.isRelease) continue;

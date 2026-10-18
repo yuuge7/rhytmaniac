@@ -40,8 +40,11 @@ Future<void> main() async {
     initialScores: await repo.scores(),
     initialSongs: await repo.songs(),
     initialBeatmaps: await repo.beatmaps(),
+    initialProgress: await repo.progress(),
+    initialCollections: await repo.collections(),
   );
 
+  applyDeviceSettings(services.initialSettings);
   runApp(ProviderScope(
     overrides: [servicesProvider.overrideWithValue(services)],
     child: const RhytmaniacApp(),

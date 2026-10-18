@@ -24,6 +24,10 @@ class AppSettings {
     this.exportFolderName,
     this.demoInstalled = false,
     this.previewMusic = true,
+    this.highRefreshRate = true,
+    this.reducedEffects = false,
+    this.colorblind = false,
+    this.leftHanded = false,
   });
 
   /// Audio latency compensation in ms (positive: sound reaches you late).
@@ -49,6 +53,18 @@ class AppSettings {
   /// Play the song (from its preview point) on the song screen.
   final bool previewMusic;
 
+  /// Run at the display's fastest refresh rate (90/120 Hz) when it has one.
+  final bool highRefreshRate;
+
+  /// No glows, trails or beat pulses: lighter on slow phones and batteries.
+  final bool reducedEffects;
+
+  /// Colours told apart by every kind of colour vision (Okabe–Ito).
+  final bool colorblind;
+
+  /// Pause button and score on the left, mirrored for left-handed play.
+  final bool leftHanded;
+
   /// Visible time window (real ms) of the Tiles lane for a map's speed.
   double tilesVisibleMs(double mapScrollSpeed) => 2600 / (mapScrollSpeed * scrollSpeed).clamp(0.4, 12.0);
 
@@ -68,6 +84,10 @@ class AppSettings {
     bool clearExportFolder = false,
     bool? demoInstalled,
     bool? previewMusic,
+    bool? highRefreshRate,
+    bool? reducedEffects,
+    bool? colorblind,
+    bool? leftHanded,
   }) =>
       AppSettings(
         globalOffsetMs: globalOffsetMs ?? this.globalOffsetMs,
@@ -84,6 +104,10 @@ class AppSettings {
         exportFolderName: clearExportFolder ? null : (exportFolderName ?? this.exportFolderName),
         demoInstalled: demoInstalled ?? this.demoInstalled,
         previewMusic: previewMusic ?? this.previewMusic,
+        highRefreshRate: highRefreshRate ?? this.highRefreshRate,
+        reducedEffects: reducedEffects ?? this.reducedEffects,
+        colorblind: colorblind ?? this.colorblind,
+        leftHanded: leftHanded ?? this.leftHanded,
       );
 
   Map<String, dynamic> toJson() => {
@@ -102,6 +126,10 @@ class AppSettings {
         'exportFolderName': exportFolderName,
         'demoInstalled': demoInstalled,
         'previewMusic': previewMusic,
+        'highRefreshRate': highRefreshRate,
+        'reducedEffects': reducedEffects,
+        'colorblind': colorblind,
+        'leftHanded': leftHanded,
       };
 
   /// Settings that travel with a profile export (device-specific ones don't).
@@ -129,6 +157,10 @@ class AppSettings {
       exportFolderName: j.containsKey('exportFolderName') ? j['exportFolderName'] as String? : b.exportFolderName,
       demoInstalled: j['demoInstalled'] as bool? ?? b.demoInstalled,
       previewMusic: j['previewMusic'] as bool? ?? b.previewMusic,
+      highRefreshRate: j['highRefreshRate'] as bool? ?? b.highRefreshRate,
+      reducedEffects: j['reducedEffects'] as bool? ?? b.reducedEffects,
+      colorblind: j['colorblind'] as bool? ?? b.colorblind,
+      leftHanded: j['leftHanded'] as bool? ?? b.leftHanded,
     );
   }
 }

@@ -49,12 +49,46 @@ abstract final class Palette {
   /// Colour for a star rating (1★ cool → 6★ white-hot).
   static Color stars(double s) => heat(0.12 + (s / 6.5) * 0.88);
 
-  static Color judgment(Judgment j) => switch (j) {
-        Judgment.perfect => flare,
-        Judgment.great => amber,
-        Judgment.good => rose,
-        Judgment.miss => miss,
-      };
+  /// Colorblind-friendly mode (a setting): judgments, lanes and combo
+  /// colours switch to the Okabe–Ito palette, which every common kind of
+  /// colour vision tells apart.
+  static bool colorblind = false;
+
+  static const _okabeIto = [
+    Color(0xFFE69F00), // orange
+    Color(0xFF56B4E9), // sky blue
+    Color(0xFF009E73), // bluish green
+    Color(0xFFF0E442), // yellow
+    Color(0xFF0072B2), // blue
+    Color(0xFFD55E00), // vermillion
+    Color(0xFFCC79A7), // reddish purple
+  ];
+
+  static Color judgment(Judgment j) => colorblind
+      ? switch (j) {
+          Judgment.perfect => const Color(0xFF56B4E9),
+          Judgment.great => const Color(0xFFF0E442),
+          Judgment.good => const Color(0xFFD55E00),
+          Judgment.miss => const Color(0xFF9A9A9A),
+        }
+      : switch (j) {
+          Judgment.perfect => flare,
+          Judgment.great => amber,
+          Judgment.good => rose,
+          Judgment.miss => miss,
+        };
+
+  /// Tiles lane colour: low lanes cool, high lanes hot (pitch), or distinct
+  /// Okabe–Ito colours.
+  static Color lane(int lane, int lanes) => colorblind
+      ? _okabeIto[lane % _okabeIto.length]
+      : heat(0.34 + 0.6 * (lanes <= 1 ? 0.5 : lane / (lanes - 1)));
+
+  static const _combo = [rose, amber, Color(0xFF8E6CF0), ember];
+  static const _comboCvd = [Color(0xFF56B4E9), Color(0xFFE69F00), Color(0xFFCC79A7), Color(0xFF009E73)];
+
+  /// Circles combo colour for combo group [i].
+  static Color combo(int i) => (colorblind ? _comboCvd : _combo)[i % 4];
 
   static Color grade(Grade g) => switch (g) {
         Grade.ss => flare,

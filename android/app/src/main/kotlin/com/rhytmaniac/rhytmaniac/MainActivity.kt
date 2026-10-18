@@ -8,7 +8,9 @@ import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
+import android.view.WindowManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
@@ -43,6 +45,9 @@ class MainActivity : FlutterActivity() {
     /** A Downloads save waiting for the storage permission (Android 9 and older). */
     private var pendingDownload: Triple<String, String, MethodChannel.Result>? = null
 
+    /** A file another app opened or shared with us, until Dart takes it. */
+    private var openedFile: Map<String, Any?>? = null
+
     companion object {
         private const val REQ_PICK_FILE = 4101
         private const val REQ_PICK_FOLDER = 4102
@@ -58,6 +63,58 @@ class MainActivity : FlutterActivity() {
         val engine = GameAudio(applicationContext, audioChannel)
         audioChannel.setMethodCallHandler { call, result -> engine.handle(call, result) }
         audio = engine
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Re-created after the process was killed: the intent was handled.
+        if (savedInstanceState == null) captureOpenedFile(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (captureOpenedFile(intent)) channel.invokeMethod("fileOpened", null)
+    }
+
+    /** "Open with" (VIEW) or "Share" (SEND) from another app. */
+    private fun captureOpenedFile(intent: Intent?): Boolean {
+        val uri: Uri? = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND ->
+                if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                }
+            else -> null
+        }
+        if (uri == null) return false
+        openedFile = try {
+            describe(uri)
+        } catch (_: Exception) {
+            mapOf("uri" to uri.toString(), "name" to (uri.lastPathSegment ?: "file"), "size" to null, "mime" to intent?.type)
+        }
+        return true
+    }
+
+    /** Fastest mode at the current resolution, or the one nearest 60 Hz. */
+    private fun setHighRefreshRate(on: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        @Suppress("DEPRECATION")
+        val display = (if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay) ?: return
+        val current = display.mode
+        val modes = display.supportedModes.filter {
+            it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
+        }
+        val target = (if (on) modes.maxByOrNull { it.refreshRate } else modes.minByOrNull { kotlin.math.abs(it.refreshRate - 60f) })
+            ?: return
+        val params: WindowManager.LayoutParams = window.attributes
+        if (params.preferredDisplayModeId != target.modeId) {
+            params.preferredDisplayModeId = target.modeId
+            window.attributes = params
+        }
     }
 
     override fun onPause() {
@@ -125,6 +182,14 @@ class MainActivity : FlutterActivity() {
                 )
             }
             "sdkInt" -> result.success(Build.VERSION.SDK_INT)
+            "takeOpenedFile" -> {
+                result.success(openedFile)
+                openedFile = null
+            }
+            "setHighRefreshRate" -> {
+                setHighRefreshRate(call.argument<Boolean>("on") ?: true)
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }

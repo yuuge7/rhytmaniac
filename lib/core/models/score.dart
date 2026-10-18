@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../rating/performance.dart';
 import 'difficulty.dart';
 
 enum Judgment {
@@ -252,12 +253,19 @@ class ScoreRecord {
     this.songArtist = '',
     this.practice = false,
     this.hasReplay = false,
+    this.pp,
+    this.mapMaxCombo,
+    this.objectCount,
+    this.strictness,
+    this.lanes,
+    this.origin,
     this.formatVersion = currentFormatVersion,
   });
 
   /// 2: osu!-style mods, mod score multipliers, replays.
   /// 3: osu!-style classic score (combo bonus, no 1,000,000 cap).
-  static const currentFormatVersion = 3;
+  /// 4: performance points and the map facts behind them.
+  static const currentFormatVersion = 4;
 
   final int formatVersion;
   final String id;
@@ -292,19 +300,46 @@ class ScoreRecord {
   /// A replay file was saved next to the scores (`replays/<id>.json.gz`).
   final bool hasReplay;
 
+  /// Performance points, worked out when the play was saved.
+  final double? pp;
+
+  /// Longest possible combo and number of objects on the map.
+  final int? mapMaxCombo;
+  final int? objectCount;
+
+  /// The map's timing strictness after mods (0..10, like osu!'s OD).
+  final double? strictness;
+
+  /// Tiles lane count.
+  final int? lanes;
+
+  /// "osu" when the difficulty was imported from osu!.
+  final String? origin;
+
   int count(Judgment j) => counts[j] ?? 0;
 
   bool get fullCombo => count(Judgment.miss) == 0 && !failed;
 
-  /// "Pulse": a performance value used to rank plays on the profile.
-  double get pulse {
-    if (failed || practice || mods.autoplay) return 0;
-    final accFactor = accuracy * accuracy * accuracy * accuracy;
-    final fc = fullCombo ? 1.08 : 1.0;
-    final nf = mods.noFail ? 0.9 : 1.0;
-    final ez = mods.easy ? 0.5 : 1.0;
-    final bonus = (mods.hidden ? 1.04 : 1.0) * (mods.hardRock ? 1.06 : 1.0) * (mods.flashlight ? 1.1 : 1.0);
-    return 10 * stars * stars * accFactor * fc * nf * ez * bonus;
+  int get judgedTotal => counts.values.fold(0, (a, b) => a + b);
+
+  /// Performance points: the stored value, or an estimate from what older
+  /// records kept (they lack the map's combo and strictness).
+  double get performance {
+    if (practice) return 0;
+    if (pp != null) return pp!;
+    final total = math.max(1, judgedTotal);
+    return performancePoints(PlayFacts(
+      mode: mode,
+      stars: stars,
+      accuracy: accuracy,
+      misses: count(Judgment.miss),
+      maxCombo: maxCombo,
+      mapMaxCombo: mapMaxCombo ?? total,
+      objectCount: objectCount ?? total,
+      strictness: strictness ?? 5,
+      mods: mods,
+      failed: failed,
+    ));
   }
 
   Map<String, dynamic> toJson() => {
@@ -331,6 +366,12 @@ class ScoreRecord {
         'songArtist': songArtist,
         'practice': practice,
         if (hasReplay) 'hasReplay': true,
+        if (pp != null) 'pp': (pp! * 100).roundToDouble() / 100,
+        if (mapMaxCombo != null) 'mapMaxCombo': mapMaxCombo,
+        if (objectCount != null) 'objectCount': objectCount,
+        if (strictness != null) 'strictness': strictness,
+        if (lanes != null) 'lanes': lanes,
+        if (origin != null) 'origin': origin,
       };
 
   factory ScoreRecord.fromJson(Map<String, dynamic> j) {
@@ -359,6 +400,12 @@ class ScoreRecord {
       songArtist: j['songArtist'] as String? ?? '',
       practice: j['practice'] as bool? ?? false,
       hasReplay: j['hasReplay'] as bool? ?? false,
+      pp: (j['pp'] as num?)?.toDouble(),
+      mapMaxCombo: (j['mapMaxCombo'] as num?)?.toInt(),
+      objectCount: (j['objectCount'] as num?)?.toInt(),
+      strictness: (j['strictness'] as num?)?.toDouble(),
+      lanes: (j['lanes'] as num?)?.toInt(),
+      origin: j['origin'] as String?,
     );
   }
 }
