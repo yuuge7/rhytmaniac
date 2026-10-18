@@ -67,8 +67,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Re-created after the process was killed: the intent was handled.
-        if (savedInstanceState == null) captureOpenedFile(intent)
+        // Re-created after the process was killed, or reopened from Recents
+        // (which replays the original intent): the file was handled already.
+        val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (savedInstanceState == null && !fromHistory) captureOpenedFile(intent)
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -326,6 +326,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   Widget _shelves(LibraryState lib) {
     final collections = ref.watch(collectionsProvider);
     final names = collections.keys.toList()..sort();
+    final have = {for (final s in lib.songs) s.id};
     if (names.isEmpty && !lib.songs.any((s) => s.favorite) && _shelf == null) return const SizedBox.shrink();
     Widget chip(String label, String? value, {IconData? icon}) => Padding(
           padding: const EdgeInsets.only(right: 8),
@@ -344,7 +345,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       child: Row(children: [
         chip('All', null),
         chip('Favorites', _favorites, icon: Icons.star_rounded),
-        for (final n in names) chip('$n · ${collections[n]!.length}', n),
+        for (final n in names) chip('$n · ${collections[n]!.where(have.contains).length}', n),
       ]),
     );
   }

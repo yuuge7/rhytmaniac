@@ -48,7 +48,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   Future<void> _takeOpenedFile() async {
     final file = await NativeBridge.instance.takeOpenedFile();
     if (file == null || !mounted) return;
-    Navigator.of(context).popUntil((r) => r.isFirst);
+    // Back to the library, but never past a screen that guards its exit (a
+    // run in progress, unsaved edits); the import goes on underneath.
+    Navigator.of(context).popUntil((r) => r.isFirst || r.popDisposition == RoutePopDisposition.doNotPop);
     setState(() => _tab = 0);
     await openIncomingFile(context, ref, file);
   }

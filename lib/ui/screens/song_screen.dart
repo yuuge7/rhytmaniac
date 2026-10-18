@@ -666,7 +666,7 @@ class _DifficultyRow extends StatelessWidget {
                         child: Text(
                           best == null
                               ? 'Not played yet'
-                              : 'Best ${formatScore(best!.score)} · ${(best!.accuracy * 100).toStringAsFixed(2)}%${best!.mods.labels.isEmpty ? '' : ' · ${best!.mods.labels.join(' ')}'}',
+                              : 'Best ${formatScore(best!.score)} · ${(best!.accuracy * 100).toStringAsFixed(2)}%${best!.mods.acronyms.isEmpty ? '' : ' · ${best!.mods.acronyms.join('')}'}',
                           style: AppText.data(11.5, color: Palette.bone),
                         ),
                       ),

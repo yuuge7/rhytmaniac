@@ -405,11 +405,15 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   /// this handler (a frame or more later when the phone is busy). Touch
   /// timestamps and [Timeline.now] share the system's monotonic clock; if
   /// the gap looks implausible, the current time is used instead.
+  ///
+  /// Never earlier than the time a frame already advanced the session to: a
+  /// replay advances to each input's own time first, so an earlier input
+  /// would find notes there that live play had already missed.
   double _eventTime(PointerEvent e) {
     final now = _clock.timeMs;
     final ageMicros = Timeline.now - e.timeStamp.inMicroseconds;
     if (ageMicros <= 0 || ageMicros > 100000) return now;
-    return now - ageMicros / 1000 * mods.rate;
+    return math.max(now - ageMicros / 1000 * mods.rate, _updatedTo);
   }
 
   /// Advances the session to an input's time first, so judgments don't
@@ -579,7 +583,8 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
           windows: _windows,
           timeline: List.of(_timeline),
           replayOf: req.replay?.player,
-          pp: record?.pp ?? (req.isReplay || mods.autoplay ? 0 : _performance(failed: false)),
+          // Runs that aren't saved (replays, autoplay, editor test plays) are worth nothing.
+          pp: record?.pp ?? 0,
           newMedals: _newMedals,
         ),
         music: lease,

@@ -103,6 +103,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
       songs: state.songs.where((s) => s.id != id).toList(),
       beatmaps: state.beatmaps.where((b) => b.songId != id).toList(),
     );
+    await ref.read(collectionsProvider.notifier).forget(id);
   }
 
   Future<BeatmapSummary> saveBeatmap(Beatmap map) async {
@@ -336,10 +337,19 @@ class CollectionsNotifier extends Notifier<Map<String, List<String>>> {
           if (!state.containsKey(n)) n: [songId],
       });
 
-  Future<void> rename(String from, String to) {
-    final next = <String, List<String>>{};
-    state.forEach((k, v) => next[k == from ? to : k] = v);
-    return _save(next);
+  /// Renaming onto an existing collection merges the two.
+  Future<void> rename(String from, String to) async {
+    final moved = state[from];
+    if (moved == null || from == to) return;
+    final next = {...state}..remove(from);
+    next[to] = {...?next[to], ...moved}.toList();
+    await _save(next);
+  }
+
+  /// Drops a deleted song from every collection.
+  Future<void> forget(String songId) async {
+    if (!state.values.any((ids) => ids.contains(songId))) return;
+    await _save({for (final e in state.entries) e.key: e.value.where((id) => id != songId).toList()});
   }
 
   Future<void> delete(String name) => _save({...state}..remove(name));

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:rhytmaniac/core/analysis/analyzer.dart';
@@ -151,6 +152,25 @@ void main() {
     final a = await makeRepo(Directory(p.join(tmp.path, 'a')));
     final bogus = File(p.join(tmp.path, 'bogus.zip'))..writeAsBytesSync(Uint8List.fromList([1, 2, 3]));
     expect(() => PackService(a).importSongPack(bogus.path), throwsA(anything));
+  });
+
+  test('tells a foreign zip apart from a profile opened as a pack', () async {
+    final a = await makeRepo(Directory(p.join(tmp.path, 'a')));
+    final foreign = File(p.join(tmp.path, 'set.zip'))
+      ..writeAsBytesSync(ZipEncoder().encode(Archive()..add(ArchiveFile.string('song.osu', 'osu file format v14'))));
+    await expectLater(PackService(a).importSongPack(foreign.path), throwsA(isA<NotAPackException>()));
+
+    final profile = await PackService(a).exportProfile(
+      profile: await a.profile(),
+      settings: const AppSettings(),
+      scores: const [],
+      songs: const [],
+      includeLibrary: false,
+    );
+    await expectLater(
+      PackService(a).importSongPack(profile),
+      throwsA(isA<FormatException>().having((e) => e is NotAPackException, 'is NotAPackException', false)),
+    );
   });
 
   test('deleting a song keeps its scores', () async {

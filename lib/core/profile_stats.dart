@@ -54,21 +54,22 @@ class ProfileStats {
   final Map<GameMode, double> ppByMode;
   final int fullCombos;
 
-  static double weightedPp(Iterable<ScoreRecord> bestFirst) => totalPerformance(bestFirst.map((s) => s.performance));
-
   factory ProfileStats.compute(List<ScoreRecord> all, {DateTime? now}) {
     final scores = all.where((s) => !s.mods.autoplay && !s.practice).toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     final completed = scores.where((s) => !s.failed).toList();
 
-    // Best play per difficulty, ranked by pp.
+    // Best play per difficulty, ranked by pp. Older records estimate their pp
+    // on every read, so each one is worked out once here.
+    final pp = Map<ScoreRecord, double>.identity();
+    double ppOf(ScoreRecord s) => pp[s] ??= s.performance;
     final bestByMap = <String, ScoreRecord>{};
     for (final s in completed) {
       final b = bestByMap[s.beatmapId];
-      if (b == null || s.performance > b.performance) bestByMap[s.beatmapId] = s;
+      if (b == null || ppOf(s) > ppOf(b)) bestByMap[s.beatmapId] = s;
     }
-    final best = bestByMap.values.where((s) => s.performance > 0).toList()
-      ..sort((a, b) => b.performance.compareTo(a.performance));
+    final best = bestByMap.values.where((s) => ppOf(s) > 0).toList()
+      ..sort((a, b) => ppOf(b).compareTo(ppOf(a)));
 
     final grades = {for (final g in Grade.values) g: 0};
     for (final s in bestByMap.values) {
@@ -103,14 +104,14 @@ class ProfileStats {
       averageAccuracy: completed.isEmpty ? 0 : completed.fold(0.0, (t, s) => t + s.accuracy) / completed.length,
       bestCombo: scores.fold(0, (t, s) => math.max(t, s.maxCombo)),
       streakDays: streak,
-      pp: weightedPp(best),
+      pp: totalPerformance(best.map(ppOf)),
       grades: grades,
       bestPlays: best.take(10).toList(),
       mostPlayed: mostPlayed.take(5).toList(),
       recent: scores.reversed.take(10).toList(),
       accuracyTrend: completed.skip(math.max(0, completed.length - 30)).map((s) => s.accuracy).toList(),
       playsByMode: {for (final m in GameMode.values) m: scores.where((s) => s.mode == m).length},
-      ppByMode: {for (final m in GameMode.values) m: weightedPp(best.where((s) => s.mode == m))},
+      ppByMode: {for (final m in GameMode.values) m: totalPerformance(best.where((s) => s.mode == m).map(ppOf))},
       fullCombos: bestByMap.values.where((s) => s.fullCombo).length,
     );
   }

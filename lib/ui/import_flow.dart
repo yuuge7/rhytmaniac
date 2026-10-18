@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/medals.dart';
+import '../data/pack_service.dart';
 import '../platform/native_bridge.dart';
 import '../state/providers.dart';
 import 'widgets/common.dart';
@@ -29,6 +30,7 @@ Future<void> importOszFile(BuildContext context, WidgetRef ref, PickedFile file)
           ? 'No playable difficulties in this set.$skipped'
           : 'Added $n osu! difficult${n == 1 ? 'y' : 'ies'} to “${r.song.title}”.$skipped',
     );
+    if (n == 0) return;
     final medals = await ref.read(progressProvider.notifier).bump(Counters.osuImports);
     if (context.mounted) announceMedals(context, medals);
   } catch (e) {
@@ -50,9 +52,13 @@ Future<bool> importPackFile(BuildContext context, WidgetRef ref, PickedFile file
           : 'Added ${r.songsAdded} song${r.songsAdded == 1 ? '' : 's'} and ${r.mapsAdded} difficult${r.mapsAdded == 1 ? 'y' : 'ies'}');
     }
     return true;
-  } on FormatException catch (e) {
+  } on NotAPackException catch (e) {
     if (!quietIfNotPack && context.mounted) showMessage(context, e.message);
     return false;
+  } on FormatException catch (e) {
+    // Ours, but not a song pack (a profile, or from a newer version).
+    if (context.mounted) showMessage(context, e.message);
+    return true;
   } catch (e) {
     if (context.mounted) showMessage(context, 'Could not import the pack: $e');
     return true;

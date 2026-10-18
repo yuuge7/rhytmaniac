@@ -21,6 +21,11 @@ class PackImportResult {
   final bool settingsApplied;
 }
 
+/// The zip has no Rhytmaniac manifest (an .osz, or any other archive).
+class NotAPackException extends FormatException {
+  const NotAPackException() : super('This file is not a Rhytmaniac pack or profile');
+}
+
 /// Zip-based sharing.
 ///
 /// Song pack (`*.rhpack.zip`):
@@ -155,7 +160,7 @@ class PackService {
     await extractFileToDisk(source, dir.path);
     final manifestFile = File(p.join(dir.path, 'manifest.json'));
     if (!await manifestFile.exists()) {
-      throw const FormatException('This file is not a Rhytmaniac pack or profile');
+      throw const NotAPackException();
     }
     final manifest = jsonDecode(await manifestFile.readAsString()) as Map<String, dynamic>;
     final v = manifest['formatVersion'] as int? ?? 1;
