@@ -72,7 +72,6 @@ flutter {
 }
 
 dependencies {
-    // Music playback (GameAudio.kt). Same version video_player_android already
-    // pulls in, so the build carries one copy of ExoPlayer.
+    // Music playback (GameAudio.kt).
     implementation("androidx.media3:media3-exoplayer:1.9.2")
 }

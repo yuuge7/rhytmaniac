@@ -252,7 +252,7 @@ class ProfileScreen extends ConsumerWidget {
               Expanded(
                 child: FilledButton.icon(
                   onPressed: () => _export(context, ref),
-                  icon: const Icon(Icons.ios_share_rounded),
+                  icon: const Icon(Icons.share_rounded),
                   label: const Text('Export'),
                 ),
               ),

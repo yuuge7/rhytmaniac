@@ -95,9 +95,13 @@ builds playable maps from about 1★ to 5★+, for two game modes.
 - osu!-style mods with score multipliers: Easy, No-Fail, Half Time / Double Time (any
   speed 0.5×–2.0×), Nightcore, Hard Rock, Hidden, Flashlight, Sudden Death, Perfect,
   Mirror and Autoplay.
+- osu!-style score with no fixed maximum: each hit is worth 300 / 100 / 50 plus a
+  combo bonus that grows with the combo, the map's difficulty and the mods, so long
+  and hard maps score far higher than short easy ones.
 - Health with passive drain (each map's HP setting), combo, accuracy, grades SS–D,
-  break banners, kiai pulses on the beat, hit sounds, haptics, optional background
-  video, pause with countdown. Music pauses whenever the app leaves the screen.
+  break banners, kiai pulses on the beat, hit sounds, haptics, pause with countdown.
+  The playfield sits on plain black so nothing distracts from the notes. Music
+  pauses whenever the app leaves the screen.
 - Results with judgment breakdown, a health and accuracy graph, slider ticks and
   spinner bonus, and an early/late hit-error histogram that can correct the song's
   offset for you.
@@ -157,6 +161,10 @@ Android 7.0 or newer.
   vote window by window for a 1/4 or 1/3 grid to find triplet and swing parts.
 - **Generation** is deterministic per seed and only reads the cached analysis, so a
   new difficulty takes well under a second.
+- **Score** follows osu!'s classic formula: a hit adds its points plus
+  `points × (combo − 1) × difficulty × mods ÷ 25`, where the difficulty multiplier
+  (1–6) comes from HP, circle size (lane count in Tiles), timing strictness and note
+  density. Slider ticks add 10, repeats 30, bonus spinner spins 1,000.
 - **Star rating** collects decaying per-object strain (Tiles: per-lane, overall and
   hold strain; Circles: aim and speed, scaled to circle size) in 400 ms sections and
   sums the sorted peaks with geometric weights. Presets are calibrated to land near
@@ -166,7 +174,7 @@ Android 7.0 or newer.
 
 | Area | Choice | Why |
 |---|---|---|
-| App | Flutter 3.47 / Dart 3.13 | One codebase; Android first, iOS kept feasible. |
+| App | Flutter 3.47 / Dart 3.13 | Fast iteration and smooth custom drawing on Android. |
 | Rendering | `CustomPainter` + `Ticker` | Two 2D playfields don't need a game engine; raw pointer events give lag-free multi-touch. |
 | Audio decoding | Android `MediaExtractor` / `MediaCodec` (Kotlin) | Built in and hardware-accelerated; no 30–60 MB ffmpeg build or licence baggage. |
 | Analysis | Pure Dart + [`fftea`](https://pub.dev/packages/fftea), run in an isolate | Testable on the desktop, never blocks the UI. |
@@ -208,7 +216,7 @@ flutter analyze                  # must report no issues
 flutter test                     # unit and widget tests, run on the desktop VM
 flutter build apk --release      # universal APK in build/app/outputs/flutter-apk/
 python tool/synth_assets.py      # regenerate the demo song and hit sounds
-python tool/make_icons.py        # regenerate launcher icons (Android and iOS)
+python tool/make_icons.py        # regenerate launcher icons
 ```
 
 ### Useful in-app tools
@@ -359,7 +367,7 @@ All files are JSON with a `formatVersion` field; readers stay backward compatibl
 | `beatmap.json` (v2) | `mode`, metadata, difficulty parameters (incl. `hpDrain`), `seed`, `starRating`, `edited`, `timing`?, `kiai`? (`[start, end]` pairs), `origin`? (`"osu"`), `objects` |
 | Tiles object | `{ "type": "tap" \| "hold", "timeMs", "lane", "endTimeMs"? }` |
 | Circles object | `{ "type": "circle" \| "slider" \| "spinner", "timeMs", "x", "y", "comboIndex", "path"?, "curve"? (`"linear"` for sampled paths), "repeats"?, "tickMs"?, "endTimeMs"? }` — coordinates normalized to 0–1 on a fixed-aspect playfield |
-| Score (v2) | judgments, accuracy, score, max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash, `hasReplay` |
+| Score (v3) | judgments, accuracy, score (osu!-style, no cap; scores saved before v3 were out of 1,000,000), max combo, mods, grade, mean error, unstable rate, timestamp, song audio hash, `hasReplay` |
 | Replay `replays/<scoreId>.json.gz` | `scoreId`, `beatmapId`, `mode`, `mods`, `player`, `frames` (flat `[timeMs, action, pointer or lane, x, y, …]`) |
 | Song pack `*.rhpack.zip` | `manifest.json` + `songs/<id>/{source.*, cover.jpg, analysis.json, maps/*.json}` |
 | Profile `*.rhprofile.zip` | `manifest.json` + `profile.json` (player, settings, scores, play stats), optionally the full library; scores re-link to songs by audio hash |
@@ -389,8 +397,7 @@ Guidelines:
 - Onset detection is heuristic; tune generated maps with Custom or the editor.
 - osu! imports: osu!taiko and osu!catch difficulties are skipped; storyboards,
   custom hit sounds and skins aren't used; the playfield is rotated to portrait.
-- Android only for now; iOS needs a native port of the decoding, file and audio
-  bridges.
+- Android only.
 
 ## License and credits
 

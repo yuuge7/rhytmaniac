@@ -66,14 +66,4 @@ values = res / 'values'
     '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
     '    <color name="ic_launcher_background">#150D1D</color>\n</resources>\n')
 legacy(1024).save(ROOT / 'tool/icon_preview.png')
-# iOS app icon set (single 1024 plus the sizes Flutter's template lists).
-ios = ROOT / 'ios/Runner/Assets.xcassets/AppIcon.appiconset'
-if ios.exists():
-    for f in ios.glob('*.png'):
-        with Image.open(f) as im:
-            w = im.size[0]
-        flat = Image.new('RGB', (w, w), INK)
-        art = legacy(w)
-        flat.paste(art, (0, 0), art)
-        flat.save(f)
 print('icons written')

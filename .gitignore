@@ -23,7 +23,6 @@ key.properties
 /build/
 /coverage/
 **/doc/api/
-**/ios/Flutter/.last_build_id
 .widget_preview/
 app.*.symbols
 app.*.map.json
@@ -43,19 +42,6 @@ app.*.map.json
 **/.cxx/
 *.apk
 *.aab
-
-# ─── iOS / macOS ─────────────────────────────────────────────────────────────
-**/ios/Pods/
-**/ios/.symlinks/
-**/ios/Flutter/Flutter.framework
-**/ios/Flutter/Flutter.podspec
-**/ios/Flutter/Generated.xcconfig
-**/ios/Flutter/ephemeral/
-**/ios/Flutter/flutter_export_environment.sh
-**/ios/Runner/GeneratedPluginRegistrant.*
-**/xcuserdata/
-*.xcworkspace/xcuserdata/
-.swiftpm/
 
 # ─── IDEs and editors ────────────────────────────────────────────────────────
 .idea/

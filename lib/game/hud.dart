@@ -86,7 +86,7 @@ class HudPainter extends CustomPainter {
     final top = padding.top + 4;
 
     // Score, accuracy and mods, top right.
-    final score = text.data(p.score.toString().padLeft(7, '0'), 19, Palette.bone, weight: 600);
+    final score = text.data(p.score.toString().padLeft(8, '0'), 19, Palette.bone, weight: 600);
     final right = size.width - 14;
     score.paint(canvas, Offset(right - score.width, top + 6));
     final acc = text.data('${(p.accuracy * 100).toStringAsFixed(2)}%', 12.5, Palette.mist);

@@ -101,15 +101,22 @@ class CirclesSession extends GameSession {
       objects.add(CircleObjectState(o, number));
     }
     _judge = Judge(windows);
-    final total = objects.fold(0, (s, o) => s + (o.object.isSlider ? 2 : 1));
-    final ticks = objects.fold(0, (s, o) => s + o.ticks.length + o.repeatTimes.length);
-    processor = GameSession.processorFor(judgments: total, ticks: ticks, hp: hpDrain, mods: mods);
     var end = 0.0;
     for (final o in objects) {
       if (o.object.endMs > end) end = o.object.endMs;
     }
     _endTimeMs = end;
-    breaks = findMapBreaks(objects.map((o) => (o.object.timeMs, o.object.endMs)), mods.rate);
+    final spans = objects.map((o) => (o.object.timeMs, o.object.endMs));
+    breaks = findMapBreaks(spans, mods.rate);
+    final total = objects.fold(0, (s, o) => s + (o.object.isSlider ? 2 : 1));
+    final ticks = objects.fold(0, (s, o) => s + o.ticks.length + o.repeatTimes.length);
+    processor = GameSession.processorFor(
+      judgments: total,
+      ticks: ticks,
+      hp: hpDrain,
+      mods: mods,
+      difficultyMultiplier: GameSession.scoreDifficultyFor(map.difficulty, size: map.difficulty.circleSize, spans: spans, breaks: breaks),
+    );
   }
 
   final HitWindows windows;
@@ -304,7 +311,7 @@ class CirclesSession extends GameSession {
           final at = s.repeatTimes[s.nextRepeat];
           final hit = _followed(s.ballAt(at));
           s.nextRepeat++;
-          processor.applyTick(hit);
+          processor.applyTick(hit, repeat: true);
           onEvent?.call(hit ? SessionEvent.repeat : SessionEvent.tickMiss, s.ballAt(at));
         }
         if (s.head != null) {

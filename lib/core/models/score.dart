@@ -3,16 +3,19 @@ import 'dart:math' as math;
 import 'difficulty.dart';
 
 enum Judgment {
-  perfect('Perfect', 1.0, 0.012),
-  great('Great', 0.8, 0.008),
-  good('Good', 0.5, 0.002),
-  miss('Miss', 0.0, -0.07);
+  perfect('Perfect', 1.0, 0.012, 300),
+  great('Great', 0.8, 0.008, 100),
+  good('Good', 0.5, 0.002, 50),
+  miss('Miss', 0.0, -0.07, 0);
 
-  const Judgment(this.label, this.accuracyWeight, this.healthDelta);
+  const Judgment(this.label, this.accuracyWeight, this.healthDelta, this.scoreValue);
 
   final String label;
   final double accuracyWeight;
   final double healthDelta;
+
+  /// Points before the combo bonus (osu!'s 300 / 100 / 50).
+  final int scoreValue;
 
   bool get breaksCombo => this == miss;
 }
@@ -253,7 +256,8 @@ class ScoreRecord {
   });
 
   /// 2: osu!-style mods, mod score multipliers, replays.
-  static const currentFormatVersion = 2;
+  /// 3: osu!-style classic score (combo bonus, no 1,000,000 cap).
+  static const currentFormatVersion = 3;
 
   final int formatVersion;
   final String id;

@@ -350,10 +350,6 @@ class _SongCard extends ConsumerWidget {
                         children: [for (final m in maps.take(7)) StarBadge(m.stars, compact: true)],
                       ),
                     ),
-                  if (song.hasVideo) ...[
-                    const SizedBox(width: 6),
-                    const Icon(Icons.movie_outlined, size: 16, color: Palette.dim),
-                  ],
                 ],
               ),
             ],

@@ -12,8 +12,6 @@ class AppSettings {
   const AppSettings({
     this.globalOffsetMs = 0,
     this.scrollSpeed = 1.0,
-    this.backgroundDim = 0.75,
-    this.backgroundVideo = true,
     this.hitSounds = true,
     this.hitSoundVolume = 0.6,
     this.musicVolume = 1.0,
@@ -34,8 +32,6 @@ class AppSettings {
   /// Tiles: personal multiplier on each map's scroll speed. Applied in real
   /// time, so it is independent of the song speed.
   final double scrollSpeed;
-  final double backgroundDim;
-  final bool backgroundVideo;
   final bool hitSounds;
   final double hitSoundVolume;
   final double musicVolume;
@@ -59,8 +55,6 @@ class AppSettings {
   AppSettings copyWith({
     double? globalOffsetMs,
     double? scrollSpeed,
-    double? backgroundDim,
-    bool? backgroundVideo,
     bool? hitSounds,
     double? hitSoundVolume,
     double? musicVolume,
@@ -78,8 +72,6 @@ class AppSettings {
       AppSettings(
         globalOffsetMs: globalOffsetMs ?? this.globalOffsetMs,
         scrollSpeed: scrollSpeed ?? this.scrollSpeed,
-        backgroundDim: backgroundDim ?? this.backgroundDim,
-        backgroundVideo: backgroundVideo ?? this.backgroundVideo,
         hitSounds: hitSounds ?? this.hitSounds,
         hitSoundVolume: hitSoundVolume ?? this.hitSoundVolume,
         musicVolume: musicVolume ?? this.musicVolume,
@@ -98,8 +90,6 @@ class AppSettings {
         'formatVersion': 1,
         'globalOffsetMs': globalOffsetMs,
         'scrollSpeed': scrollSpeed,
-        'backgroundDim': backgroundDim,
-        'backgroundVideo': backgroundVideo,
         'hitSounds': hitSounds,
         'hitSoundVolume': hitSoundVolume,
         'musicVolume': musicVolume,
@@ -127,8 +117,6 @@ class AppSettings {
     return AppSettings(
       globalOffsetMs: d('globalOffsetMs', b.globalOffsetMs),
       scrollSpeed: d('scrollSpeed', b.scrollSpeed),
-      backgroundDim: d('backgroundDim', b.backgroundDim),
-      backgroundVideo: j['backgroundVideo'] as bool? ?? b.backgroundVideo,
       hitSounds: j['hitSounds'] as bool? ?? b.hitSounds,
       hitSoundVolume: d('hitSoundVolume', b.hitSoundVolume),
       musicVolume: d('musicVolume', b.musicVolume),

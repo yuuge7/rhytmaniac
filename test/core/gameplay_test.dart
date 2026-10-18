@@ -62,15 +62,50 @@ void main() {
   });
 
   group('score processor', () {
-    test('all perfect is 1,000,000 and SS', () {
-      final p = ScoreProcessor(totalJudgments: 50);
+    test('all perfect: 300 per hit plus a growing combo bonus, SS', () {
+      final p = ScoreProcessor(totalJudgments: 50, difficultyMultiplier: 4);
+      var expected = 0;
       for (var i = 0; i < 50; i++) {
         p.apply(Judgment.perfect, errorMs: 0, timeMs: i * 100.0);
+        expected += 300 + (300 * (i > 0 ? i - 1 : 0) * 4 / 25).floor();
       }
-      expect(p.score, 1000000);
+      expect(p.score, expected);
       expect(p.accuracy, 1.0);
       expect(p.grade, Grade.ss);
       expect(p.maxCombo, 50);
+    });
+
+    test('score has no fixed maximum: longer, harder and modded runs score more', () {
+      int perfectRun(int n, {int difficulty = 3, double mods = 1}) {
+        final p = ScoreProcessor(totalJudgments: n, difficultyMultiplier: difficulty, multiplier: mods);
+        for (var i = 0; i < n; i++) {
+          p.apply(Judgment.perfect);
+        }
+        return p.score;
+      }
+
+      expect(perfectRun(200), greaterThan(perfectRun(100) * 2));
+      expect(perfectRun(100, difficulty: 5), greaterThan(perfectRun(100, difficulty: 2)));
+      expect(perfectRun(100, mods: 1.12), greaterThan(perfectRun(100)));
+      expect(perfectRun(500), isNot(1000000));
+    });
+
+    test('a combo break costs more than the missed note', () {
+      final full = ScoreProcessor(totalJudgments: 60, difficultyMultiplier: 4);
+      final broken = ScoreProcessor(totalJudgments: 60, difficultyMultiplier: 4);
+      for (var i = 0; i < 60; i++) {
+        full.apply(Judgment.perfect);
+        broken.apply(i == 30 ? Judgment.miss : Judgment.perfect);
+      }
+      expect(full.score - broken.score, greaterThan(300 * 5));
+    });
+
+    test('difficulty multiplier follows osu!: settings and density, 1..6', () {
+      final easy = ScoreProcessor.scoreDifficulty(hp: 2, size: 2, strictness: 3, objects: 60, drainSeconds: 80);
+      final hard = ScoreProcessor.scoreDifficulty(hp: 7, size: 5, strictness: 8, objects: 800, drainSeconds: 120);
+      expect(easy, inInclusiveRange(1, 3));
+      expect(hard, greaterThan(easy));
+      expect(hard, lessThanOrEqualTo(6));
     });
 
     test('miss breaks combo and drains health', () {
@@ -188,7 +223,9 @@ void main() {
         s.update(t);
       }
       expect(s.complete, isTrue);
-      expect(s.processor.score, 1000000);
+      expect(s.processor.counts[Judgment.perfect], s.processor.totalJudgments);
+      expect(s.processor.maxCombo, s.processor.totalJudgments);
+      expect(s.processor.score, greaterThan(300 * s.processor.totalJudgments));
     });
   });
 
@@ -288,7 +325,8 @@ void main() {
       expect(s.complete, isTrue);
       // Autoplay spins fast enough to earn spinner bonus on top.
       expect(s.processor.bonus, greaterThan(0));
-      expect(s.processor.score - s.processor.bonus, 1000000);
+      expect(s.processor.counts[Judgment.perfect], s.processor.totalJudgments);
+      expect(s.processor.score, greaterThan(s.processor.bonus));
     });
   });
 

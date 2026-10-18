@@ -37,8 +37,6 @@ class TilesSession extends GameSession {
     }
     notes.sort((a, b) => a.note.timeMs.compareTo(b.note.timeMs));
     _judge = Judge(windows);
-    final total = notes.fold(0, (s, n) => s + (n.note.isHold ? 2 : 1));
-    processor = GameSession.processorFor(judgments: total, hp: hpDrain, mods: mods);
     _laneNotes = List.generate(lanes, (l) => [for (final n in notes) if (n.note.lane == l) n]);
     _laneCursor = List.filled(lanes, 0);
     laneDown = List.filled(lanes, false);
@@ -47,7 +45,15 @@ class TilesSession extends GameSession {
       if (n.note.endMs > end) end = n.note.endMs;
     }
     _endTimeMs = end;
-    breaks = findMapBreaks(notes.map((n) => (n.note.timeMs, n.note.endMs)), mods.rate);
+    final spans = notes.map((n) => (n.note.timeMs, n.note.endMs));
+    breaks = findMapBreaks(spans, mods.rate);
+    final total = notes.fold(0, (s, n) => s + (n.note.isHold ? 2 : 1));
+    processor = GameSession.processorFor(
+      judgments: total,
+      hp: hpDrain,
+      mods: mods,
+      difficultyMultiplier: GameSession.scoreDifficultyFor(map.difficulty, size: lanes.toDouble(), spans: spans, breaks: breaks),
+    );
   }
 
   final int lanes;

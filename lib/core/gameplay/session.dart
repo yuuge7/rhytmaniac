@@ -1,4 +1,5 @@
 import '../models/beatmap.dart';
+import '../models/difficulty.dart';
 import '../models/score.dart';
 import '../models/timing.dart';
 import '../scoring/score_processor.dart';
@@ -94,6 +95,7 @@ abstract class GameSession {
     int ticks = 0,
     required double hp,
     required Mods mods,
+    int difficultyMultiplier = 2,
   }) =>
       ScoreProcessor(
         totalJudgments: judgments,
@@ -102,9 +104,36 @@ abstract class GameSession {
         healthScale: (0.6 + 0.08 * hp) * mods.drainFactor,
         gainScale: 1.15 - 0.03 * hp,
         multiplier: mods.scoreMultiplier,
+        difficultyMultiplier: difficultyMultiplier,
         suddenDeath: mods.suddenDeath,
         perfectOnly: mods.perfect,
       );
+
+  /// osu!'s score difficulty multiplier for a run over [spans] (start, end)
+  /// of objects, minus breaks.
+  static int scoreDifficultyFor(
+    DifficultyParams p, {
+    required double size,
+    required Iterable<(double, double)> spans,
+    required List<TimeSpan> breaks,
+  }) {
+    var first = double.infinity, last = double.negativeInfinity;
+    var count = 0;
+    for (final (s, e) in spans) {
+      first = first < s ? first : s;
+      last = last > e ? last : e;
+      count++;
+    }
+    if (count == 0) return 1;
+    final breakMs = breaks.fold(0.0, (t, b) => t + b.durationMs);
+    return ScoreProcessor.scoreDifficulty(
+      hp: p.hpDrain,
+      size: size,
+      strictness: p.hitWindow,
+      objects: count,
+      drainSeconds: (last - first - breakMs) / 1000,
+    );
+  }
 }
 
 /// Gaps of at least 3.5 real seconds between objects become breaks, from

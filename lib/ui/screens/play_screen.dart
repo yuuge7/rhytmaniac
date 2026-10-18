@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../audio/app_audio.dart';
@@ -78,7 +76,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   MusicPlayer get _player => _lease!.player;
   StreamSubscription<AudioSample>? _sampleSub;
   StreamSubscription<MusicEvent>? _eventSub;
-  VideoPlayerController? _video;
   HitSounds? _sfx;
   late AppSettings _settings;
   SongClock _clock = SongClock();
@@ -99,17 +96,12 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   double _audioStartMs = 0;
   int _countdown = 0;
   int _loops = 0;
-  double _lastVideoSync = -1e9;
-  bool _videoSyncBusy = false;
-  double _videoSpeed = 1;
   Size _size = Size.zero;
   final Map<int, int> _pointerLane = {};
   final List<int> _laneHolds = List.filled(10, 0);
   double _fps = 0;
   double _drift = 0;
 
-  /// Seconds the frame rate has been too low while a video plays.
-  double _slowFor = 0;
   Duration _lastFrame = Duration.zero;
   BeatGrid? _grid;
   List<TimeSpan> _kiai = const [];
@@ -138,7 +130,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     _sampleSub?.cancel();
     _eventSub?.cancel();
     _lease?.release();
-    _video?.dispose();
     _sfx?.dispose();
     _text.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
@@ -152,7 +143,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       _pause();
       // Whatever the phase, nothing keeps playing behind the home screen.
       if (_lease?.current ?? false) _player.pause();
-      _video?.pause();
     }
   }
 
@@ -187,18 +177,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
             if (_kiai.isEmpty && req.map.origin == null) _kiai = findKiai(a);
           }
         } catch (_) {}
-      }
-      if (req.song.hasVideo && _settings.backgroundVideo) {
-        try {
-          final v = VideoPlayerController.file(File(source), videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true));
-          await v.initialize();
-          await v.setVolume(0);
-          await v.setPlaybackSpeed(mods.rate);
-          _videoSpeed = mods.rate;
-          _video = v;
-        } catch (_) {
-          _video = null;
-        }
       }
       if (!mounted) return;
       await _startRun();
@@ -260,8 +238,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     await _player.setSpeed(mods.rate, pitch: mods.pitch);
     await _player.setVolume(_settings.musicVolume);
     await _player.seek(_audioStartMs);
-    await _video?.pause();
-    await _video?.seekTo(Duration(milliseconds: _audioStartMs.round()));
     _clock = SongClock(rate: mods.rate, offsetMs: _settings.globalOffsetMs + req.song.offsetMs)..start(clockStart);
     _audioStarted = false;
     _musicEnded = false;
@@ -316,10 +292,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (_lastFrame != Duration.zero) {
       final dt = (elapsed - _lastFrame).inMicroseconds / 1e6;
       if (dt > 0) _fps = _fps * 0.9 + (1 / dt) * 0.1;
-      if (_video != null && _audioStarted && _phase == _Phase.playing && dt > 0 && dt < 0.5) {
-        _slowFor = _fps < 40 ? _slowFor + dt : math.max(0, _slowFor - dt);
-        if (_slowFor > 3) _dropVideo();
-      }
     }
     _lastFrame = elapsed;
     final session = _session;
@@ -330,9 +302,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
         _audioStarted = true;
         _hardSync = true;
         _player.play();
-        _video?.play();
-      } else if (_audioStarted) {
-        _syncVideo(audioT);
       }
       final t = _clock.timeMs;
       _replayDriver?.advanceTo(t);
@@ -352,49 +321,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     }
     _hud.observe(session, _clock.timeMs);
     _frame.value++;
-  }
-
-  /// The phone can't decode the video and keep the notes smooth: show the
-  /// cover instead for the rest of the run.
-  void _dropVideo() {
-    final v = _video;
-    if (v == null) return;
-    _video = null;
-    _slowFor = 0;
-    v.pause();
-    if (mounted) setState(() {});
-    WidgetsBinding.instance.addPostFrameCallback((_) => v.dispose());
-  }
-
-  /// Keeps the background video with the music by nudging its speed; only
-  /// big gaps are fixed with a seek, which is slow on most phones.
-  Future<void> _syncVideo(double audioT) async {
-    final v = _video;
-    if (v == null || _videoSyncBusy || audioT - _lastVideoSync < 500 * mods.rate) return;
-    _lastVideoSync = audioT;
-    _videoSyncBusy = true;
-    try {
-      final pos = await v.position;
-      if (pos == null || !mounted || _phase != _Phase.playing) return;
-      final drift = pos.inMilliseconds - _clock.audioTimeMs;
-      if (drift.abs() > 450) {
-        await v.seekTo(Duration(milliseconds: (_clock.audioTimeMs + 120 * mods.rate).round()));
-        _lastVideoSync = _clock.audioTimeMs + 1500 * mods.rate;
-        if (_videoSpeed != mods.rate) {
-          _videoSpeed = mods.rate;
-          await v.setPlaybackSpeed(_videoSpeed);
-        }
-        return;
-      }
-      final target = drift.abs() < 40 ? mods.rate : mods.rate * (1 - (drift / 1200).clamp(-0.12, 0.12));
-      if ((target - _videoSpeed).abs() > 0.004) {
-        _videoSpeed = target;
-        await v.setPlaybackSpeed(target);
-      }
-    } catch (_) {
-    } finally {
-      _videoSyncBusy = false;
-    }
   }
 
   /// Practice loops and Circles beat pulses read the grid.
@@ -428,7 +354,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     _hardSync = true;
     await _player.seek(start);
     _clock.seek(start);
-    await _video?.seekTo(Duration(milliseconds: start.round()));
   }
 
   void _onFeedback(HitFeedback f) {
@@ -521,7 +446,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (_phase != _Phase.playing && _phase != _Phase.countdown) return;
     _clock.pause();
     if (_lease?.current ?? false) _player.pause();
-    _video?.pause();
     // Lift every finger: holds can't survive a pause.
     for (final p in _pointerLane.keys.toList()) {
       _up(p);
@@ -545,7 +469,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     if (_audioStarted) {
       _hardSync = true;
       _player.play();
-      _video?.play();
     }
     _clock.resume();
     _lastFrame = Duration.zero;
@@ -562,7 +485,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   Future<void> _quit() async {
     _clock.pause();
     if (_lease?.current ?? false) await _player.pause();
-    await _video?.pause();
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -572,7 +494,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     _audioStartMs = math.max(_audioStartMs, target);
     _hardSync = true;
     await _player.seek(target);
-    await _video?.seekTo(Duration(milliseconds: target.round()));
     _clock.seek(target);
   }
 
@@ -588,7 +509,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
         await _player.setVolume(_settings.musicVolume * (1 - i / 7));
       }
       if (_lease?.current ?? false) await _player.pause();
-      await _video?.pause();
     }();
     _saveScore(failed: true);
   }
@@ -609,7 +529,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     final repo = ref.read(servicesProvider).repo;
     _sampleSub?.cancel();
     _eventSub?.cancel();
-    await _video?.pause();
     if (!mounted) return;
     Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (_) => ResultsScreen(
@@ -714,14 +633,14 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
         }
       },
       child: Scaffold(
-        backgroundColor: Palette.inkDeep,
+        // Plain black behind the notes: nothing to distract from them.
+        backgroundColor: Colors.black,
         body: LayoutBuilder(builder: (context, c) {
           _size = c.biggest;
           final s = _session;
           return Stack(
             fit: StackFit.expand,
             children: [
-              RepaintBoundary(child: _background()),
               if (s != null) _game(s),
               if (s != null)
                 IgnorePointer(
@@ -783,26 +702,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     );
   }
 
-  Widget _background() {
-    final v = _video;
-    final dim = _settings.backgroundDim;
-    final cover = req.song.coverFile == null ? null : ref.read(servicesProvider).paths.coverFile(req.song.id, req.song.coverFile!);
-    Widget bg;
-    if (v != null && v.value.isInitialized) {
-      bg = FittedBox(fit: BoxFit.cover, child: SizedBox(width: v.value.size.width, height: v.value.size.height, child: VideoPlayer(v)));
-    } else if (cover != null && File(cover).existsSync()) {
-      // Dimmed behind the notes, so a smaller decode looks the same and
-      // keeps a wide cover from becoming a huge texture.
-      final px = (_size.height * MediaQuery.devicePixelRatioOf(context) * 0.6).round();
-      bg = Image.file(File(cover), fit: BoxFit.cover, cacheHeight: px > 0 ? px : null, gaplessPlayback: true);
-    } else {
-      bg = const ColoredBox(color: Palette.ink);
-    }
-    return Stack(fit: StackFit.expand, children: [
-      bg,
-      ColoredBox(color: Colors.black.withValues(alpha: dim)),
-    ]);
-  }
 
   Widget _game(GameSession s) {
     return Listener(
@@ -824,7 +723,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
                   repaint: _frame,
                   beatPulse: _beatPulse,
                   inBreak: _inBreak,
-                  backgroundAlpha: _video != null ? 0.55 : 0.8,
                 )
               : CirclesPainter(
                   session: s as CirclesSession,

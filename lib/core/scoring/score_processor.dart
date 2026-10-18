@@ -41,10 +41,11 @@ class Judge {
 
 /// Score, combo, accuracy and health for one run.
 ///
-/// Score is out of 1,000,000 before mods: 70% from accuracy, 30% from combo
-/// (each judgment weighted by the square root of the combo it was hit at).
-/// Slider ticks and repeats only feed the combo. The mod [multiplier] scales
-/// the result and spinner [bonus] points come on top, as in osu!.
+/// Scoring works like osu!'s classic score: every hit is worth its
+/// judgment's points (300 / 100 / 50) plus a combo bonus of
+/// `points × (combo − 1) × difficulty × mods ÷ 25`, so there is no fixed
+/// maximum: long maps, hard maps and long combos all score higher. Slider
+/// ticks give 10 and repeats 30 points; spinner [bonus] spins 1,000 each.
 class ScoreProcessor {
   ScoreProcessor({
     required this.totalJudgments,
@@ -53,15 +54,10 @@ class ScoreProcessor {
     this.healthScale = 1.0,
     this.gainScale = 1.0,
     this.multiplier = 1.0,
+    this.difficultyMultiplier = 2,
     this.suddenDeath = false,
     this.perfectOnly = false,
-  }) {
-    var sum = 0.0;
-    for (var i = 1; i <= totalJudgments + totalTicks; i++) {
-      sum += _comboWeight(i);
-    }
-    _maxComboSum = math.max(1, sum);
-  }
+  });
 
   final int totalJudgments;
 
@@ -74,7 +70,13 @@ class ScoreProcessor {
 
   /// Multiplies health gained from hits.
   final double gainScale;
+
+  /// Mod score multiplier (applies to the combo bonus).
   final double multiplier;
+
+  /// 1..6 from the map's settings and density, like osu!'s difficulty
+  /// multiplier (see [scoreDifficulty]).
+  final int difficultyMultiplier;
 
   /// Fail on the first combo break.
   final bool suddenDeath;
@@ -90,29 +92,30 @@ class ScoreProcessor {
   bool failed = false;
   double _accSum = 0;
   int _judged = 0;
-  double _comboSum = 0;
-  late final double _maxComboSum;
+  int _points = 0;
   int ticksHit = 0;
   int ticksMissed = 0;
 
-  /// Spinner bonus points (outside the 1,000,000).
+  /// Spinner bonus points.
   int bonus = 0;
 
   int get judged => _judged;
   bool get finished => _judged >= totalJudgments;
 
-  static double _comboWeight(int combo) => math.sqrt(math.min(combo, 400).toDouble());
-
   void apply(Judgment j, {double? errorMs, double? timeMs}) {
     counts[j] = counts[j]! + 1;
     _judged++;
     _accSum += j.accuracyWeight;
+    final value = j.scoreValue;
+    if (value > 0) {
+      final comboBonus = value * math.max(0, combo - 1) * difficultyMultiplier * multiplier / 25;
+      _points += value + comboBonus.floor();
+    }
     if (j.breaksCombo) {
       combo = 0;
     } else {
       combo++;
       maxCombo = math.max(maxCombo, combo);
-      _comboSum += j.accuracyWeight * _comboWeight(combo);
     }
     if (errorMs != null && timeMs != null && j != Judgment.miss) {
       errors.add(HitError(timeMs, errorMs));
@@ -123,13 +126,13 @@ class ScoreProcessor {
     if ((suddenDeath && j.breaksCombo) || (perfectOnly && j != Judgment.perfect)) failed = true;
   }
 
-  /// A slider tick or repeat: followed ([hit]) or dropped.
-  void applyTick(bool hit) {
+  /// A slider tick (or [repeat]): followed ([hit]) or dropped.
+  void applyTick(bool hit, {bool repeat = false}) {
     if (hit) {
       ticksHit++;
+      _points += repeat ? 30 : 10;
       combo++;
       maxCombo = math.max(maxCombo, combo);
-      _comboSum += _comboWeight(combo);
       health = (health + 0.004 * gainScale).clamp(0.0, 1.0);
     } else {
       ticksMissed++;
@@ -150,12 +153,7 @@ class ScoreProcessor {
   /// Accuracy over judged objects so far (1.0 before anything is judged).
   double get accuracy => _judged == 0 ? 1.0 : _accSum / _judged;
 
-  int get score {
-    if (totalJudgments == 0) return bonus;
-    final acc = _accSum / totalJudgments;
-    final comboPart = _comboSum / _maxComboSum;
-    return (1000000 * (0.7 * acc + 0.3 * comboPart) * multiplier).round() + bonus;
-  }
+  int get score => _points + bonus;
 
   /// Longest possible combo.
   int get maxPossibleCombo => totalJudgments + totalTicks;
@@ -165,6 +163,19 @@ class ScoreProcessor {
   double get meanError {
     if (errors.isEmpty) return 0;
     return errors.fold(0.0, (s, e) => s + e.errorMs) / errors.length;
+  }
+
+  /// osu!'s difficulty multiplier for scoring: HP, circle size (lanes in
+  /// Tiles), timing strictness and note density, 1..6.
+  static int scoreDifficulty({
+    required double hp,
+    required double size,
+    required double strictness,
+    required int objects,
+    required double drainSeconds,
+  }) {
+    final density = drainSeconds <= 0 ? 0.0 : (objects / drainSeconds * 8).clamp(0.0, 16.0);
+    return ((hp + size + strictness + density) / 38 * 5).round().clamp(1, 6);
   }
 
   /// Unstable rate: 10 × standard deviation of hit errors.
