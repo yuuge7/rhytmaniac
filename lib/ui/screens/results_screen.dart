@@ -59,7 +59,7 @@ class RunResult {
   /// Medals this run unlocked.
   final List<Medal> newMedals;
 
-  bool get isNewBest => record != null && (previousBest == null || record!.score > previousBest!.score);
+  bool get isNewBest => record != null && record!.score > 0 && (previousBest == null || record!.score > previousBest!.score);
 }
 
 class ResultsScreen extends ConsumerStatefulWidget {

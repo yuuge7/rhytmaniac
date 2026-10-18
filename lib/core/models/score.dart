@@ -175,10 +175,15 @@ class Mods {
         if (autoplay) 'Auto',
       ];
 
-  /// Two-letter osu!-style acronyms for tight spaces.
+  /// Two-letter osu!-style acronyms for tight spaces. DT, NC and HT mean
+  /// exactly 1.5× and 0.75×; other speeds show as the speed itself.
   List<String> get acronyms => [
-        if (rate > 1.0) nightcore ? 'NC' : 'DT',
-        if (rate < 1.0) 'HT',
+        if (rate == 1.5)
+          nightcore ? 'NC' : 'DT'
+        else if (rate == 0.75)
+          'HT'
+        else if (rate != 1.0)
+          '${nightcore ? 'NC ' : ''}${_trim(rate)}×',
         if (easy) 'EZ',
         if (hardRock) 'HR',
         if (hidden) 'HD',

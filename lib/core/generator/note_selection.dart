@@ -136,9 +136,26 @@ List<NoteCandidate> selectNotes(
   final allBreaks = breaks ?? findBreaks(a);
 
   // 1. One candidate per grid slot (1/4 beats, or 1/3 in triplet sections);
-  //    the strongest onset wins.
+  //    the strongest onset wins. An onset far from every slot (a flam, a
+  //    grace note, a 1/8 ornament) would put a note where nothing sounds,
+  //    so it is left out; unless the grid fits the song poorly overall,
+  //    when snapping is the lesser evil.
+  double slotError(Onset o) {
+    final s = grid.snapNatural(o.timeMs);
+    final section = grid.at(o.timeMs);
+    return (o.timeMs - s.timeMs).abs() / (section.beatLengthMs / section.subdivisions);
+  }
+
+  var strong = 0, offGrid = 0;
+  for (final o in a.onsets) {
+    if (o.strength < 0.3) continue;
+    strong++;
+    if (slotError(o) > 0.3) offGrid++;
+  }
+  final dropOffGrid = strong >= 20 && offGrid <= strong * 0.25;
   final bySlot = <int, NoteCandidate>{};
   for (final o in a.onsets) {
+    if (dropOffGrid && slotError(o) > 0.3) continue;
     final snapped = grid.snapNatural(o.timeMs);
     final t = snapped.timeMs;
     if (t < 0 || t > a.durationMs - 100) continue;

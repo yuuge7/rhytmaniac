@@ -29,6 +29,7 @@ TempoEstimate estimateTempo(
   Float64List odf, {
   required double frameMs,
   Float64List? lowEnvelope,
+  Float64List? midEnvelope,
   double minBpm = 60,
   double maxBpm = 200,
 }) {
@@ -167,6 +168,51 @@ TempoEstimate estimateTempo(
       final doubled = comb(bpm * 2);
       best = doubled;
       bpm *= 2;
+    }
+  }
+
+  // Backbeat check: kick and snare taking turns on every beat read like a
+  // slow tempo with the kick on the beat and the snare between. When the
+  // in-between hits are mid-heavy (snares, claps) and nearly as strong as
+  // the beats, they are beats too.
+  if (bpm < 100 && bpm * 2 <= maxBpm && midEnvelope != null) {
+    final period = 60000 / (bpm * frameMs);
+    var on = 0.0, off = 0.0, midOn = 0.0, midOff = 0.0;
+    for (var p = best.phase; p < n - 1 - period / 2; p += period) {
+      on += _maxNear(combEnv, p, 1.5);
+      off += _maxNear(combEnv, p + period / 2, 1.5);
+      midOn += _maxNear(midEnvelope, p, 1.5);
+      midOff += _maxNear(midEnvelope, p + period / 2, 1.5);
+    }
+    if (on > 0 && off / on > 0.35 && midOff > midOn * 1.2) {
+      best = comb(bpm * 2);
+      bpm *= 2;
+    }
+  }
+
+  // Half-beat check. On the right grid the beats carry the weight (kicks,
+  // bass, snares) and the snares or claps take turns with the kicks, so the
+  // mid band alternates from beat to beat. Off-beat hats and bass stabs
+  // have sharper attacks and can win the comb; when the low and mid bands,
+  // or that alternation, clearly sit half a beat away, so do the beats.
+  if (lowEnvelope != null && midEnvelope != null) {
+    final period = 60000 / (bpm * frameMs);
+    var on = 0.0, off = 0.0, midOffSum = 0.0;
+    final altOn = [0.0, 0.0], altOff = [0.0, 0.0];
+    var k = 0;
+    for (var p = best.phase; p < n - 1 - period / 2; p += period, k++) {
+      final mOn = _maxNear(midEnvelope, p, 1.5), mOff = _maxNear(midEnvelope, p + period / 2, 1.5);
+      on += _maxNear(lowEnvelope, p, 1.5) + mOn;
+      off += _maxNear(lowEnvelope, p + period / 2, 1.5) + mOff;
+      altOn[k % 2] += mOn;
+      altOff[k % 2] += mOff;
+      midOffSum += mOff;
+    }
+    final alternationOn = (altOn[0] - altOn[1]).abs();
+    final alternationOff = (altOff[0] - altOff[1]).abs();
+    final backbeatAway = alternationOff > 2 * alternationOn && alternationOff > 0.08 * midOffSum;
+    if (off > on * 1.4 || (backbeatAway && off > on * 0.8)) {
+      best = (score: best.score, phase: (best.phase + period / 2) % period, mean: best.mean);
     }
   }
 

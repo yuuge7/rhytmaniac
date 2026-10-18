@@ -9,6 +9,21 @@ import '../core/models/analysis.dart';
 import '../core/models/beatmap.dart';
 import '../core/models/difficulty.dart';
 
+/// Makes [maps] again from [analysis] with their own settings, seeds and
+/// names (new ids), in a background isolate.
+Future<List<Beatmap>> regenerateMaps(SongAnalysis analysis, List<Beatmap> maps) => Isolate.run(() => [
+      for (final m in maps)
+        BeatmapGenerator.generate(
+          analysis: analysis,
+          songId: m.songId,
+          mode: m.mode,
+          params: m.difficulty,
+          seed: m.seed,
+          metadata: m.metadata,
+          name: m.name,
+        ),
+    ]);
+
 /// What the background isolate should do for one song.
 class AnalysisJob {
   const AnalysisJob({

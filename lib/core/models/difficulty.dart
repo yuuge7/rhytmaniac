@@ -224,7 +224,7 @@ class DifficultyParams {
       scrollSpeed: lerp([1.6, 2.0, 2.4, 2.8, 3.2]).clamp(1.0, 5.0),
       circleSize: lerp([2.0, 3.0, 4.0, 4.5, 5.0]).clamp(0.0, 10.0),
       lanes: lanes,
-      spacing: lerp([0.9, 1.1, 1.4, 1.95, 2.25]).clamp(0.3, 3.5),
+      spacing: lerp([0.9, 1.1, 1.4, 1.95, 2.0]).clamp(0.3, 3.5),
       chordAllowance: lerp([0.0, 0.06, 0.22, 0.38, 0.6]).clamp(0.0, 1.0),
       jackAllowance: lerp([0.0, 0.0, 0.1, 0.25, 0.45]).clamp(0.0, 1.0),
       holdFrequency: lerp([0.30, 0.38, 0.42, 0.42, 0.40]).clamp(0.0, 1.0),

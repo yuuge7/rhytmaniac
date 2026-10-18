@@ -174,8 +174,11 @@ void main() {
     final map = gen(GameMode.tiles, DifficultyPreset.hard);
     final out = BeatmapGenerator.regenerateSection(
       map: map, analysis: demo, startMs: 20000, endMs: 30000, seed: 999);
-    final before = map.tileNotes.where((n) => n.timeMs < 19000).map((n) => n.toJson()).toList();
-    final after = out.tileNotes.where((n) => n.timeMs < 19000).map((n) => n.toJson()).toList();
+    // Notes before the range keep their place; a hold that ran into the
+    // range now ends before it.
+    final before = map.tileNotes.where((n) => n.timeMs < 19000).map((n) => (n.timeMs, n.lane)).toList();
+    final after = out.tileNotes.where((n) => n.timeMs < 19000).map((n) => (n.timeMs, n.lane)).toList();
     expect(after, before);
+    expect(out.tileNotes.where((n) => n.timeMs < 20000 && n.endMs > 20000), isEmpty);
   });
 }

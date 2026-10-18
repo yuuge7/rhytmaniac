@@ -413,8 +413,32 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
                     await _open(MaterialPageRoute<void>(builder: (_) => AnalysisScreen(song: song)));
                   }
                 case 'reanalyze':
-                  await ref.read(importProvider.notifier).reanalyze(song);
-                  if (context.mounted) showMessage(context, 'Analysis updated. Generate a new difficulty to use it.');
+                  final done = await ref.read(importProvider.notifier).reanalyze(song);
+                  if (done == null || !context.mounted) return;
+                  final generated = ref.read(libraryProvider.notifier).generatedFor(song.id);
+                  final rebuild = generated.isNotEmpty &&
+                      await showDialog<bool>(
+                            context: context,
+                            builder: (c) => AlertDialog(
+                              title: const Text('Rebuild difficulties?'),
+                              content: Text('Make the ${generated.length} generated difficult${generated.length == 1 ? 'y' : 'ies'} '
+                                  'again from the new analysis? Edited and osu! difficulties stay as they are, and scores '
+                                  'you set stay in your profile.'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep them')),
+                                TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Rebuild')),
+                              ],
+                            ),
+                          ) ==
+                          true;
+                  if (!context.mounted) return;
+                  if (rebuild) {
+                    final n = await ref.read(libraryProvider.notifier).rebuildGenerated(song.id);
+                    setState(() => _selectedId = null);
+                    if (context.mounted) showMessage(context, 'Analysis updated; rebuilt $n difficult${n == 1 ? 'y' : 'ies'}.');
+                  } else {
+                    showMessage(context, 'Analysis updated. Generate a new difficulty to use it.');
+                  }
                 case 'export':
                   if (context.mounted) await exportSongPack(context, ref, [song]);
                 case 'delete':
@@ -666,7 +690,7 @@ class _DifficultyRow extends StatelessWidget {
                         child: Text(
                           best == null
                               ? 'Not played yet'
-                              : 'Best ${formatScore(best!.score)} · ${(best!.accuracy * 100).toStringAsFixed(2)}%${best!.mods.acronyms.isEmpty ? '' : ' · ${best!.mods.acronyms.join('')}'}',
+                              : 'Best ${formatScore(best!.score)} · ${(best!.accuracy * 100).toStringAsFixed(2)}%${best!.mods.acronyms.isEmpty ? '' : ' · ${best!.mods.acronyms.join(' ')}'}',
                           style: AppText.data(11.5, color: Palette.bone),
                         ),
                       ),
@@ -704,12 +728,18 @@ extension on _DifficultyRow {
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            '${formatScore(s.score)} · ${(s.accuracy * 100).toStringAsFixed(2)}% · ${s.maxCombo}× · ${s.performance.round()}pp${s.mods.acronyms.isEmpty ? '' : ' · ${s.mods.acronyms.join('')}'}',
+            '${formatScore(s.score)} · ${(s.accuracy * 100).toStringAsFixed(2)}% · ${s.maxCombo}× · ${s.performance.round()}pp',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppText.data(11, color: Palette.bone),
           ),
         ),
+        // Mods change what a score means, so they never get cut off.
+        if (s.mods.acronyms.isNotEmpty) ...[
+          const SizedBox(width: 6),
+          Text(s.mods.acronyms.join(' '), style: AppText.data(10.5, color: Palette.amber)),
+        ],
+        const SizedBox(width: 6),
         Text(date, style: AppText.data(10.5, color: Palette.dim)),
         SizedBox(
           width: 40,

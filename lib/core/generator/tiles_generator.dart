@@ -8,13 +8,15 @@ import 'note_selection.dart';
 
 /// Lane assignment for Tiles mode.
 ///
-/// - Pitch-following: bass-heavy onsets lean left, bright ones lean right.
+/// - Pitch-following: low sounds lean left, high ones right ([Onset.height]).
 /// - Jacks (same lane again soon) are forbidden at low difficulty and become
 ///   more likely as jackAllowance rises.
-/// - Chords appear on strong, bass-heavy hits, more often at high difficulty.
-/// - Fast passages fall into stairs and trills; hands alternate.
-/// - Sustained sounds become holds; at low difficulty a hold ends before the
-///   next note so only one lane is ever busy.
+/// - Chords appear on strong, bass-heavy hits and on full-spectrum accents
+///   (crashes), more often at high difficulty.
+/// - Fast passages follow the melody: rising notes climb right, falling
+///   ones step left, a repeated note trills; hands alternate.
+/// - Sustained sounds become holds, long ones nearly always; at low
+///   difficulty a hold ends before the next note so only one lane is busy.
 List<TileNote> generateTiles(SongAnalysis a, DifficultyParams p, int seed) {
   final candidates = selectNotes(a, p);
   return assignLanes(candidates, a, p, seed);
@@ -47,6 +49,8 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
       final downbeat = c.strongBeat;
       var p2 = p.chordAllowance * math.pow(c.strength, 1.5) * (c.onset.low > 0.6 ? 1.3 : 0.8);
       if (downbeat) p2 *= 1.4;
+      // Crashes and kick-plus-cymbal accents fill the whole spectrum.
+      if (c.onset.low > 0.6 && c.onset.high > 0.6 && c.strength > 0.6) p2 *= 1.6;
       if (gap < beat / 4 + 1) p2 *= 0.4; // keep fast streams readable
       if (rng.chance(p2)) {
         k = 2;
@@ -63,16 +67,24 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
     k = math.min(k, math.max(1, math.min(free.length, lanes - 1)));
 
     // --- weights ----------------------------------------------------------------
-    final target = c.onset.brightness * (lanes - 1);
+    final target = c.onset.height * (lanes - 1);
     final sigma = lanes * 0.45;
     final fast = gap <= beat / 2 + 1;
+    // How far the sound moved from the previous note, when tones are known.
+    final toneStep = i > 0 && c.onset.tone != null && candidates[i - 1].onset.tone != null
+        ? c.onset.tone! - candidates[i - 1].onset.tone!
+        : null;
     int? patternLane;
     if (fast && lastLanes.length == 1) {
       final last = lastLanes.first;
-      final trill = prevLanes.length == 1 && prevLanes.first != last && p.jackAllowance + p.chordAllowance > 0.25;
-      if (trill && rng.chance(0.45)) {
+      final canTrill = prevLanes.length == 1 && prevLanes.first != last;
+      final sameNote = toneStep != null && toneStep.abs() < 0.007;
+      final trill = canTrill &&
+          (sameNote ? p.jackAllowance + p.chordAllowance > 0.1 : (toneStep == null && p.jackAllowance + p.chordAllowance > 0.25));
+      if (trill && rng.chance(sameNote ? 0.6 : 0.45)) {
         patternLane = prevLanes.first;
       } else {
+        if (toneStep != null && toneStep.abs() >= 0.007) stairDir = toneStep > 0 ? 1 : -1;
         var next = last + stairDir;
         if (next < 0 || next >= lanes) {
           stairDir = -stairDir;
@@ -85,7 +97,14 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
     final weights = List<double>.filled(lanes, 0);
     for (final l in free) {
       var w = math.exp(-math.pow(l - target, 2) / (2 * sigma * sigma)) + 0.15;
-      if (patternLane == l) w *= 3.5;
+      if (patternLane == l) w *= toneStep != null && toneStep.abs() >= 0.007 ? 5.0 : 3.5;
+      // Melody: a note clearly higher than the last one moves right, a lower
+      // one left (when there is room that way).
+      if (toneStep != null && toneStep.abs() >= 0.007 && lastLanes.length == 1 && gap <= beat * 1.01) {
+        final last = lastLanes.first;
+        final roomThatWay = toneStep > 0 ? last < lanes - 1 : last > 0;
+        if (roomThatWay && l != last) w *= (l > last) == (toneStep > 0) ? 2.2 : 0.3;
+      }
       // Jacks.
       if (lastLanes.contains(l)) {
         final slow = gap >= beat * 1.5;
@@ -126,7 +145,13 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
     // --- holds ------------------------------------------------------------------
     double? holdEnd;
     final sustain = c.sustainEndMs;
-    if (sustain != null && rng.chance(p.holdFrequency * (0.5 + 0.5 * c.strength) * 1.6)) {
+    // Long, clear sustained sounds (a held vocal, a pad, a bass note ringing
+    // out) nearly always become holds; shorter ones only sometimes.
+    final sustainBeats = sustain == null ? 0.0 : (sustain - t) / beat;
+    final holdChance = sustainBeats >= 2
+        ? math.min(0.85, p.holdFrequency * 1.9)
+        : p.holdFrequency * (0.5 + 0.5 * c.strength) * 1.6;
+    if (sustain != null && rng.chance(holdChance)) {
       var end = sustain;
       if (!overlapHolds) end = math.min(end, nextTime - releaseGap);
       final minHold = math.max(beat * (p.snapDivisor == 1 ? 1.0 : 0.5), 180.0);
@@ -149,7 +174,7 @@ List<TileNote> assignLanes(List<NoteCandidate> candidates, SongAnalysis a, Diffi
     prevLanes = lastLanes;
     lastLanes = chosen;
     lastTime = t;
-    if (rng.chance(0.12)) stairDir = -stairDir;
+    if (c.onset.tone == null && rng.chance(0.12)) stairDir = -stairDir;
   }
   notes.sort((x, y) => x.timeMs != y.timeMs ? x.timeMs.compareTo(y.timeMs) : x.lane.compareTo(y.lane));
   return notes;

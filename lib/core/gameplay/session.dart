@@ -42,6 +42,20 @@ abstract class GameSession {
   /// sliders, drains health, and plays objects when autoplay is on.
   void update(double timeMs);
 
+  double _advancedTo = double.negativeInfinity;
+
+  /// Song time the session was last [advance]d to.
+  double get advancedTo => _advancedTo;
+
+  /// [update], but never backwards: a call with an earlier time than the
+  /// last one does nothing, so frames and inputs that arrive out of order
+  /// can't undo what already happened (or drain health twice).
+  void advance(double timeMs) {
+    if (timeMs <= _advancedTo) return;
+    _advancedTo = timeMs;
+    update(timeMs);
+  }
+
   /// Song time of the first object.
   double get firstObjectMs;
 

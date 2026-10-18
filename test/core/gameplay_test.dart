@@ -204,6 +204,46 @@ void main() {
       expect(s.processor.counts[Judgment.perfect], 1);
     });
 
+    test('a touch near a lane edge goes to the neighbour only when it has a note due', () {
+      final s = TilesSession(
+        map: tilesMap(const [
+          TileNote(timeMs: 1000, lane: 2),
+          TileNote(timeMs: 1000, lane: 1),
+          TileNote(timeMs: 3000, lane: 1),
+        ]),
+        mods: const Mods(),
+        windows: windows,
+      );
+      // Dead centre of lane 1 stays in lane 1, whatever is due.
+      expect(s.laneFor(1.5, 1000), 1);
+      // Right edge of lane 1, both lanes due: the lane under the finger.
+      expect(s.laneFor(1.85, 1000), 1);
+      s.press(1, 1000);
+      // Lane 1 is done for now; the finger near lane 2 means lane 2.
+      expect(s.laneFor(1.85, 1010), 2);
+      // Far from the edge, or with nothing due next door: no help.
+      expect(s.laneFor(1.5, 1010), 1);
+      expect(s.laneFor(1.15, 1010), 1);
+      // Off the field edges.
+      expect(s.laneFor(-0.4, 1010), 0);
+      expect(s.laneFor(4.3, 1010), 3);
+    });
+
+    test('advance never goes backwards', () {
+      final s = TilesSession(
+        map: tilesMap(const [TileNote(timeMs: 1000, lane: 0)]),
+        mods: const Mods(),
+        windows: windows,
+      );
+      s.advance(1200);
+      expect(s.advancedTo, 1200);
+      s.advance(900);
+      expect(s.advancedTo, 1200);
+      // The late window closed at 1120: the note is gone either way.
+      s.press(0, 1100);
+      expect(s.processor.counts[Judgment.miss], 1);
+    });
+
     test('mirror flips lanes', () {
       final s = TilesSession(
         map: tilesMap(const [TileNote(timeMs: 1000, lane: 0)]),

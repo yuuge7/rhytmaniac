@@ -119,6 +119,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Screen areas (logical pixels, [left, top, right, bottom]) where edge
+     * swipes go to the app instead of the system back gesture. Android
+     * honours up to 200 dp per edge. An empty list gives the edges back.
+     */
+    private fun setGestureExclusion(rects: List<List<Double>>) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val d = resources.displayMetrics.density
+        window.decorView.systemGestureExclusionRects = rects.filter { it.size == 4 }.map {
+            android.graphics.Rect((it[0] * d).toInt(), (it[1] * d).toInt(), (it[2] * d).toInt(), (it[3] * d).toInt())
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         // Music never keeps playing behind another app or the home screen.
@@ -190,6 +203,10 @@ class MainActivity : FlutterActivity() {
             }
             "setHighRefreshRate" -> {
                 setHighRefreshRate(call.argument<Boolean>("on") ?: true)
+                result.success(null)
+            }
+            "setGestureExclusion" -> {
+                setGestureExclusion(call.argument<List<List<Double>>>("rects") ?: emptyList())
                 result.success(null)
             }
             else -> result.notImplemented()

@@ -77,6 +77,20 @@ class NativeBridge {
     }
   }
 
+  /// Keeps edge swipes inside [rects] (logical pixels) for the app instead of
+  /// the system back gesture. An empty list gives the edges back.
+  Future<void> setGestureExclusion(List<Rect> rects) async {
+    try {
+      await _channel.invokeMethod('setGestureExclusion', {
+        'rects': [
+          for (final r in rects) [r.left, r.top, r.right, r.bottom],
+        ],
+      });
+    } on MissingPluginException {
+      // Not on Android.
+    }
+  }
+
   /// Opens the system file picker. Returns null if the user backs out.
   Future<PickedFile?> pickFile(List<String> mimeTypes) async {
     final r = await _channel.invokeMapMethod<String, dynamic>('pickFile', {'mimeTypes': mimeTypes});

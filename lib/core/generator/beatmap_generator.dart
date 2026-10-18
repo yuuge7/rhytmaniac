@@ -59,7 +59,14 @@ class BeatmapGenerator {
     bool inside(double t) => t >= startMs && t <= endMs;
     Beatmap result;
     if (map.mode == GameMode.tiles) {
-      final kept = map.tileNotes.where((n) => !inside(n.timeMs) && !(n.timeMs < startMs && n.endMs > startMs));
+      // A hold running into the range ends before it (or becomes a tap).
+      TileNote trimmed(TileNote n) {
+        if (!(n.timeMs < startMs && n.endMs > startMs)) return n;
+        final end = analysis.grid.snap(startMs - analysis.grid.beatLengthAt(startMs) / 2, 4);
+        return end - n.timeMs >= 150 ? n.copyWith(endTimeMs: end) : n.copyWith(clearEnd: true);
+      }
+
+      final kept = map.tileNotes.where((n) => !inside(n.timeMs)).map(trimmed);
       final added = fresh.tileNotes.where((n) => inside(n.timeMs) && n.endMs <= endMs);
       final notes = [...kept, ...added]
         ..sort((a, b) => a.timeMs != b.timeMs ? a.timeMs.compareTo(b.timeMs) : a.lane.compareTo(b.lane));

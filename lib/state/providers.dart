@@ -7,6 +7,7 @@ import '../core/models/difficulty.dart';
 import '../core/models/score.dart';
 import '../core/models/song.dart';
 import '../core/util/ids.dart';
+import '../data/analysis_worker.dart';
 import '../data/import_service.dart';
 import '../data/library_repository.dart';
 import '../data/pack_service.dart';
@@ -113,6 +114,31 @@ class LibraryNotifier extends Notifier<LibraryState> {
       beatmaps: [...state.beatmaps.where((b) => b.id != map.id), summary],
     );
     return summary;
+  }
+
+  /// The generated difficulties of [songId]: not edited, not from osu!.
+  List<BeatmapSummary> generatedFor(String songId) =>
+      state.beatmaps.where((b) => b.songId == songId && !b.edited && b.origin == null).toList();
+
+  /// Makes the generated difficulties of [songId] again from its current
+  /// analysis, with the same settings and seeds. They get new ids, so scores
+  /// set on the old notes stay with those. Returns how many were rebuilt.
+  Future<int> rebuildGenerated(String songId) async {
+    final analysis = await _repo.analysis(songId);
+    final old = generatedFor(songId);
+    if (analysis == null || old.isEmpty) return 0;
+    final maps = [for (final b in old) await _repo.loadBeatmap(songId, b.id)];
+    final fresh = await regenerateMaps(analysis, maps);
+    for (final b in old) {
+      await _repo.deleteBeatmap(b.songId, b.id);
+    }
+    final summaries = [for (final m in fresh) await _repo.saveBeatmap(m)];
+    final gone = {for (final b in old) b.id};
+    state = LibraryState(
+      songs: state.songs,
+      beatmaps: [...state.beatmaps.where((b) => !gone.contains(b.id)), ...summaries],
+    );
+    return fresh.length;
   }
 
   Future<void> deleteBeatmap(BeatmapSummary b) async {

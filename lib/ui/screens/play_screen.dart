@@ -31,6 +31,7 @@ import '../../game/circles_painter.dart';
 import '../../game/fx.dart';
 import '../../game/hud.dart';
 import '../../game/tiles_painter.dart';
+import '../../platform/native_bridge.dart';
 import '../../state/providers.dart';
 import '../theme.dart';
 import '../widgets/medals.dart';
@@ -137,6 +138,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     _sfx?.dispose();
     _text.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+    if (_excludedFor != Size.zero) NativeBridge.instance.setGestureExclusion(const []);
     WakelockPlus.disable();
     super.dispose();
   }
@@ -217,7 +219,6 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     s.onFeedback = _onFeedback;
     s.onEvent = _onSessionEvent;
     _session = s;
-    _updatedTo = double.negativeInfinity;
     _hud.reset();
     _trails.clear();
     _recorder.clear();
@@ -310,8 +311,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
       }
       final t = _clock.timeMs;
       _replayDriver?.advanceTo(t);
-      session.update(t);
-      if (t > _updatedTo) _updatedTo = t;
+      session.advance(t - _missGraceMs(session));
       if (_timeline.isEmpty || t - _timeline.last.timeMs >= 250 * mods.rate) {
         if (t >= session.firstObjectMs) _timeline.add(RunSample(t, session.processor.health, session.processor.accuracy));
       }
@@ -396,10 +396,31 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
 
   // --- input ------------------------------------------------------------------------
 
+  Size _excludedFor = Size.zero;
+
+  /// Thumbs on the outer lanes near the hit line shouldn't set off the
+  /// system back gesture (which would pause the run).
+  void _excludeEdges() {
+    if (!_tiles || _size == Size.zero || _size == _excludedFor) return;
+    _excludedFor = _size;
+    final hitY = TilesLayout(_size, req.map.difficulty.lanes).hitY;
+    // Android grants up to 200 dp per edge.
+    final top = math.max(0.0, hitY - 140), bottom = math.min(_size.height, top + 200);
+    NativeBridge.instance.setGestureExclusion([
+      Rect.fromLTRB(0, top, 48, bottom),
+      Rect.fromLTRB(_size.width - 48, top, _size.width, bottom),
+    ]);
+  }
+
   bool get _acceptsInput => _phase == _Phase.playing && _size != Size.zero && !req.isReplay;
 
-  /// Song time the session was last advanced to.
-  double _updatedTo = double.negativeInfinity;
+  /// Tiles misses are called this long (real ms) after a note's late window
+  /// closes, so a touch the phone was slow to hand over still finds its note
+  /// instead of a note a frame already gave up on. Autoplay hits and Circles
+  /// slider ticks stay on time.
+  static const _tilesMissGraceMs = 40.0;
+
+  double _missGraceMs(GameSession s) => s is TilesSession && !mods.autoplay ? _tilesMissGraceMs * mods.rate : 0;
 
   /// Song time when the finger actually touched, not when the event reached
   /// this handler (a frame or more later when the phone is busy). Touch
@@ -412,17 +433,13 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
   double _eventTime(PointerEvent e) {
     final now = _clock.timeMs;
     final ageMicros = Timeline.now - e.timeStamp.inMicroseconds;
-    if (ageMicros <= 0 || ageMicros > 100000) return now;
-    return math.max(now - ageMicros / 1000 * mods.rate, _updatedTo);
+    if (ageMicros <= 0 || ageMicros > 250000) return now;
+    return math.max(now - ageMicros / 1000 * mods.rate, _session?.advancedTo ?? double.negativeInfinity);
   }
 
   /// Advances the session to an input's time first, so judgments don't
   /// depend on when frames happen to land (replays rely on this too).
-  void _advanceTo(double t) {
-    if (t <= _updatedTo) return;
-    _session?.update(t);
-    _updatedTo = t;
-  }
+  void _advanceTo(double t) => _session?.advance(t);
 
   void _down(PointerDownEvent e) {
     if (!_acceptsInput) return;
@@ -430,9 +447,13 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
     final s = _session;
     _advanceTo(t);
     if (s is TilesSession) {
-      final lane = TilesLayout(_size, s.lanes).laneAt(e.localPosition.dx);
+      final layout = TilesLayout(_size, s.lanes);
+      final lane = s.laneFor((e.localPosition.dx - layout.field.left) / layout.laneWidth, t);
       _pointerLane[e.pointer] = lane;
-      if (_laneHolds[lane]++ == 0) _recorder.add(ReplayFrame(t, ReplayAction.press, lane));
+      _laneHolds[lane]++;
+      // Every press is judged, a second finger in a busy lane too, so every
+      // press goes into the replay; the lane comes up when the last finger does.
+      _recorder.add(ReplayFrame(t, ReplayAction.press, lane));
       s.press(lane, t);
     } else if (s is CirclesSession) {
       final p = CirclesLayout(_size).toNorm(e.localPosition);
@@ -705,6 +726,7 @@ class _PlayScreenState extends ConsumerState<PlayScreen> with SingleTickerProvid
         backgroundColor: Colors.black,
         body: LayoutBuilder(builder: (context, c) {
           _size = c.biggest;
+          _excludeEdges();
           final s = _session;
           return Stack(
             fit: StackFit.expand,

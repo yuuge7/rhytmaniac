@@ -94,6 +94,29 @@ class TilesSession extends GameSession {
     return i < list.length ? list[i] : null;
   }
 
+  /// The lane a touch [x] lanes across the field means (0 is the left edge
+  /// of lane 0). Normally the lane under the finger. Near the edge it
+  /// shares with another lane, a finger that would hit nothing in its own
+  /// lane counts for the neighbour when a note there can be hit right now:
+  /// in fast stairs and chords, thumbs rarely land dead centre.
+  int laneFor(double x, double timeMs) {
+    final lane = x.floor().clamp(0, lanes - 1);
+    if (mods.autoplay) return lane;
+    final frac = x - lane;
+    const edge = 0.3;
+    final neighbour = frac < edge ? lane - 1 : (frac > 1 - edge ? lane + 1 : -1);
+    if (neighbour < 0 || neighbour >= lanes) return lane;
+    if (_hittable(lane, timeMs)) return lane;
+    return _hittable(neighbour, timeMs) ? neighbour : lane;
+  }
+
+  /// Whether a press in [lane] at [timeMs] would hit its next note.
+  bool _hittable(int lane, double timeMs) {
+    final n = _nextInLane(lane);
+    if (n == null) return false;
+    return realMs(timeMs - n.note.timeMs, _rate).abs() <= windows.good;
+  }
+
   void press(int lane, double timeMs) {
     if (lane < 0 || lane >= lanes) return;
     laneDown[lane] = true;

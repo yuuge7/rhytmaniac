@@ -26,7 +26,7 @@ class ReplayDriver {
     final s = session;
     while (_cursor < frames.length && frames[_cursor].timeMs <= t) {
       final f = frames[_cursor++];
-      s.update(f.timeMs);
+      s.advance(f.timeMs);
       if (s is TilesSession) {
         if (f.action == ReplayAction.press) s.press(f.lane, f.timeMs);
         if (f.action == ReplayAction.release) s.release(f.lane, f.timeMs);

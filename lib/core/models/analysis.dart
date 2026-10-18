@@ -10,6 +10,7 @@ class Onset {
     required this.low,
     required this.mid,
     required this.high,
+    this.tone,
   });
 
   final double timeMs;
@@ -22,6 +23,12 @@ class Onset {
   final double mid;
   final double high;
 
+  /// Where in the spectrum the new sound arrived, 0 (40 Hz) to 1 (10 kHz) on
+  /// a log scale: a kick sits low, a bass note a little higher, a lead line
+  /// moves up and down with its melody, hats sit high. Null in analyses from
+  /// before format 3.
+  final double? tone;
+
   /// 0 = bass-heavy, 1 = treble-heavy.
   double get brightness {
     final sum = low + mid + high;
@@ -29,12 +36,17 @@ class Onset {
     return (mid * 0.5 + high) / sum;
   }
 
+  /// [tone] when known, else [brightness]: where a note should sit from
+  /// low (left) to high (right).
+  double get height => tone ?? brightness;
+
   Map<String, dynamic> toJson() => {
         'timeMs': _r1(timeMs),
         'strength': _r3(strength),
         'low': _r3(low),
         'mid': _r3(mid),
         'high': _r3(high),
+        if (tone != null) 'tone': _r3(tone!),
       };
 
   factory Onset.fromJson(Map<String, dynamic> j) => Onset(
@@ -43,6 +55,7 @@ class Onset {
         low: (j['low'] as num?)?.toDouble() ?? 0,
         mid: (j['mid'] as num?)?.toDouble() ?? 0,
         high: (j['high'] as num?)?.toDouble() ?? 0,
+        tone: (j['tone'] as num?)?.toDouble(),
       );
 }
 
@@ -103,7 +116,8 @@ class SongAnalysis {
   });
 
   /// 2: [timingPoints] (tempo changes, triplet sections).
-  static const currentFormatVersion = 2;
+  /// 3: [Onset.tone]; timing points that follow a drifting tempo.
+  static const currentFormatVersion = 3;
 
   final int formatVersion;
   final int sampleRate;

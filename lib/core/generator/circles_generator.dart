@@ -14,7 +14,9 @@ import 'note_selection.dart';
 /// - Flow: the heading drifts smoothly (curves), with occasional reversals
 ///   at combo starts (back-and-forth). Streams curve gently.
 /// - Accents become jumps at higher spacing.
-/// - Sustained sounds become sliders; long loud gaps can become spinners.
+/// - Sustained sounds become sliders (long ones nearly always); a long held
+///   sound becomes a short slider that turns back on each beat (repeats)
+///   rather than one long path. Long loud gaps can become spinners.
 /// - New combos start at phrase boundaries (every 2 bars) and after rests.
 List<CircleObject> generateCircles(SongAnalysis a, DifficultyParams p, int seed) {
   final candidates = selectNotes(a, p);
@@ -139,12 +141,27 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
     double? sliderEnd;
     var absorbs = false;
     final sustain = c.sustainEndMs;
-    if (sustain != null && rng.chance(p.holdFrequency * (0.5 + 0.5 * c.strength) * 1.5)) {
+    // A long sustain with room before the next note nearly always slides.
+    final roomBeats = sustain == null ? 0.0 : (math.min(sustain, nextTime - releaseGap) - t) / beat;
+    final sliderChance = roomBeats >= 2
+        ? math.min(1.0, p.holdFrequency * 2.2)
+        : p.holdFrequency * (0.5 + 0.5 * c.strength) * 1.5;
+    if (sustain != null && rng.chance(sliderChance)) {
       final minLen = beat * (p.snapDivisor == 1 ? 1.0 : 0.5);
       var end = math.min(sustain, nextTime - releaseGap);
       if (end - t < minLen && sustain - t >= minLen && rng.chance(0.5)) {
-        // Dense passage: the slider swallows the notes under its body.
-        end = sustain;
+        // Dense passage: the slider may swallow a note or two under its body,
+        // but not the rhythm: it stops before a stronger note or a third one.
+        var cut = sustain;
+        var swallowed = 0;
+        for (var j = i + 1; j < candidates.length && candidates[j].timeMs < sustain + releaseGap; j++) {
+          if (candidates[j].strength > c.strength || swallowed == 2) {
+            cut = candidates[j].timeMs - releaseGap;
+            break;
+          }
+          swallowed++;
+        }
+        end = cut;
         absorbs = true;
       }
       if (end - t >= minLen) {
@@ -175,7 +192,15 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
     // --- slider body ----------------------------------------------------------------------
     if (sliderEnd != null) {
       final beats = (sliderEnd - t) / beat;
-      final length = (0.17 * p.spacing * beats).clamp(0.12, 0.6);
+      // Two beats or more: a short track travelled back and forth, turning
+      // on the beats, instead of one long path across the screen.
+      var repeats = 0;
+      if (beats >= 1.9 && p.snapDivisor > 1 && rng.chance(0.55)) {
+        final whole = beats.round();
+        if ((beats - whole).abs() < 0.05) repeats = (whole - 1).clamp(1, 3);
+      }
+      final spanBeats = beats / (repeats + 1);
+      final length = (0.17 * p.spacing * spanBeats).clamp(0.12, repeats > 0 ? 0.32 : 0.6);
       List<Point2>? ctrl;
       for (var k = 0; k <= 11 && ctrl == null; k++) {
         final delta = (k == 0 ? 0 : ((k + 1) ~/ 2) * (math.pi / 6)) * (k.isOdd ? 1 : -1);
@@ -188,7 +213,8 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
         );
         if (inBounds(end) && inBounds(mid)) {
           ctrl = [head, mid, end];
-          heading = math.atan2(end.y - mid.y, end.x - mid.x);
+          // An odd number of turns ends back at the head, heading home.
+          heading = repeats.isOdd ? math.atan2(head.y - mid.y, head.x - mid.x) : math.atan2(end.y - mid.y, end.x - mid.x);
         }
       }
       if (ctrl == null) {
@@ -204,9 +230,10 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
           path: normalized,
           endTimeMs: sliderEnd,
           tickMs: beat,
+          repeats: repeats,
         ));
         placed.add((time: t, end: sliderEnd, pos: head, endPos: ctrl.last));
-        pos = ctrl.last;
+        pos = repeats.isOdd ? head : ctrl.last;
         lastEnd = sliderEnd;
         comboLength++;
         if (absorbs) {

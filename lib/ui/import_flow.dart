@@ -26,9 +26,12 @@ Future<void> importOszFile(BuildContext context, WidgetRef ref, PickedFile file)
     final skipped = r.skipped.isEmpty ? '' : ' Skipped ${r.skipped.length}: ${r.skipped.map((s) => '${s.version} (${s.reason})').join(', ')}.';
     showMessage(
       context,
-      n == 0
-          ? 'No playable difficulties in this set.$skipped'
-          : 'Added $n osu! difficult${n == 1 ? 'y' : 'ies'} to “${r.song.title}”.$skipped',
+      n > 0
+          ? 'Added $n osu! difficult${n == 1 ? 'y' : 'ies'} to “${r.song.title}”.$skipped'
+          : r.existingSong
+              ? 'No playable difficulties in this set.$skipped'
+              // The song itself is new: it came in with generated difficulties.
+              : 'Added “${r.song.title}” with generated difficulties; none of the osu! ones can be played here.$skipped',
     );
     if (n == 0) return;
     final medals = await ref.read(progressProvider.notifier).bump(Counters.osuImports);
