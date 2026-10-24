@@ -129,10 +129,7 @@ class LibraryNotifier extends Notifier<LibraryState> {
     if (analysis == null || old.isEmpty) return 0;
     final maps = [for (final b in old) await _repo.loadBeatmap(songId, b.id)];
     final fresh = await regenerateMaps(analysis, maps);
-    for (final b in old) {
-      await _repo.deleteBeatmap(b.songId, b.id);
-    }
-    final summaries = [for (final m in fresh) await _repo.saveBeatmap(m)];
+    final summaries = await _repo.replaceBeatmaps(old, fresh);
     final gone = {for (final b in old) b.id};
     state = LibraryState(
       songs: state.songs,

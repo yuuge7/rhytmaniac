@@ -149,8 +149,8 @@ class SongAnalysis {
   /// Empty: one straight section at [bpm] from [beatOffsetMs].
   final List<TimingPoint> timingPoints;
 
-  /// The beat grid: [timingPoints], or the single [bpm] grid.
-  BeatGrid get grid => timingPoints.isNotEmpty
+  /// The beat grid: [timingPoints], or the single [bpm] grid. Built once.
+  late final BeatGrid grid = timingPoints.isNotEmpty
       ? BeatGrid(timingPoints)
       : BeatGrid.single(bpm: bpm, offsetMs: beatOffsetMs, barOffsetBeats: barOffsetBeats);
 

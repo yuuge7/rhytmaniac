@@ -434,8 +434,10 @@ class _SongScreenState extends ConsumerState<SongScreen> with RouteAware {
                   if (!context.mounted) return;
                   if (rebuild) {
                     final n = await ref.read(libraryProvider.notifier).rebuildGenerated(song.id);
+                    // The build context is this State's, so this covers setState too.
+                    if (!context.mounted) return;
                     setState(() => _selectedId = null);
-                    if (context.mounted) showMessage(context, 'Analysis updated; rebuilt $n difficult${n == 1 ? 'y' : 'ies'}.');
+                    showMessage(context, 'Analysis updated; rebuilt $n difficult${n == 1 ? 'y' : 'ies'}.');
                   } else {
                     showMessage(context, 'Analysis updated. Generate a new difficulty to use it.');
                   }

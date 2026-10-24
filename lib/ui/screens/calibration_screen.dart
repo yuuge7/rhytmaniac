@@ -70,8 +70,12 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> with Sing
       await f.parent.create(recursive: true);
       await f.writeAsBytes(encodeWav16(s, sr));
     }
-    _lease = await AppAudio.instance.open(path);
-    if (mounted) setState(() {});
+    final lease = await AppAudio.instance.open(path);
+    if (!mounted) {
+      lease.release();
+      return;
+    }
+    setState(() => _lease = lease);
   }
 
   @override

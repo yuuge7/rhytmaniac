@@ -99,6 +99,33 @@ class LibraryRepository {
     if (await f.exists()) await f.delete();
   }
 
+  /// Swaps the difficulties [old] for [fresh] all at once: the new files are
+  /// written first, then the index changes in one transaction, then the old
+  /// files go. If anything fails before the swap, the old set stays.
+  Future<List<BeatmapSummary>> replaceBeatmaps(List<BeatmapSummary> old, List<Beatmap> fresh) async {
+    for (final b in fresh) {
+      await writeJsonFile(paths.mapFile(b.songId, b.id), b.toJson());
+    }
+    final summaries = [for (final b in fresh) summarize(b)];
+    await _db.transaction((txn) async {
+      for (final b in old) {
+        await database.beatmaps.record(b.id).delete(txn);
+      }
+      for (final s in summaries) {
+        await database.beatmaps.record(s.id).put(txn, s.toJson());
+      }
+    });
+    for (final b in old) {
+      final f = File(paths.mapFile(b.songId, b.id));
+      try {
+        if (await f.exists()) await f.delete();
+      } on FileSystemException {
+        // Out of the index already; a stray file does no harm.
+      }
+    }
+    return summaries;
+  }
+
   // --- scores --------------------------------------------------------------------
 
   Future<List<ScoreRecord>> scores() async {

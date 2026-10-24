@@ -246,8 +246,10 @@ SongAnalysis analyzePcm(
     }
     final s = sections[longest];
     bpm = s.bpm;
-    beatOffset = s.timeMs % s.beatLengthMs;
-    barOffset = ((s.barOffsetBeats - (s.timeMs / s.beatLengthMs).floor()) % 4 + 4) % 4;
+    // The anchor moves back to the first beat at or after 0.
+    final beatsEarlier = (s.timeMs / s.beatLengthMs).floor();
+    beatOffset = s.timeMs - beatsEarlier * s.beatLengthMs;
+    barOffset = shiftBarOffset(s.barOffsetBeats, -beatsEarlier);
   }
   onProgress?.call(0.85);
 

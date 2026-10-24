@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/medals.dart';
 import '../theme.dart';
+import 'common.dart';
 
 IconData medalIcon(MedalGroup g) => switch (g) {
       MedalGroup.skill => Icons.star_rounded,
@@ -50,11 +51,13 @@ void announceMedals(BuildContext context, List<Medal> medals) {
   if (medals.isEmpty || !context.mounted) return;
   // Queued after whatever message is showing (often the reason for the
   // medal, like "Added 2 osu! difficulties"), instead of replacing it.
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-    content: Text(medals.length == 1
+  showMessage(
+    context,
+    medals.length == 1
         ? 'Medal unlocked: ${medals.first.title}'
-        : '${medals.length} medals unlocked: ${medals.map((m) => m.title).join(', ')}'),
-  ));
+        : '${medals.length} medals unlocked: ${medals.map((m) => m.title).join(', ')}',
+    queue: true,
+  );
 }
 
 /// Every medal, lit or not; tap one to read how to earn it.

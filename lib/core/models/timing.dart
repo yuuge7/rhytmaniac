@@ -60,6 +60,11 @@ class TimingPoint {
   String toString() => 'TimingPoint(${timeMs.toStringAsFixed(1)} ms, ${bpm.toStringAsFixed(2)} BPM${triplet ? ', triplet' : ''})';
 }
 
+/// [barOffset] (which beat after an anchor is a downbeat) re-counted from
+/// an anchor [beatsLater] beats later (negative: earlier). Beat k after the
+/// old anchor is beat k - [beatsLater] after the new one.
+int shiftBarOffset(int barOffset, int beatsLater, {int meter = 4}) => (barOffset - beatsLater) % meter;
+
 /// Where a time sits on the grid: beat [beat] (counted across sections from
 /// the first point), [sub] of [subdivisions] parts into it.
 class GridPosition {

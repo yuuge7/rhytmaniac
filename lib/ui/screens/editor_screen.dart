@@ -54,12 +54,18 @@ class _EditorScreenState extends ConsumerState<EditorScreen> with SingleTickerPr
 
   Future<void> _init() async {
     final paths = ref.read(servicesProvider).paths;
+    final AudioLease lease;
     try {
-      _lease = await AppAudio.instance.open(paths.sourceFile(widget.song.id, widget.song.sourceFile));
+      lease = await AppAudio.instance.open(paths.sourceFile(widget.song.id, widget.song.sourceFile));
     } catch (e) {
       if (mounted) showMessage(context, 'Could not load the audio: $e');
       return;
     }
+    if (!mounted) {
+      lease.release();
+      return;
+    }
+    _lease = lease;
     final first = ed.map.firstObjectMs;
     ed.seek(math.max(0, first - 1000));
     await _player.seek(ed.timeMs);

@@ -68,7 +68,7 @@ TempoEstimate refineTempo(TempoEstimate t, List<Onset> onsets, {double minStreng
     bpm: bpm,
     offsetMs: offset,
     confidence: t.confidence,
-    barOffsetBeats: ((t.barOffsetBeats - shift) % 4 + 4) % 4,
+    barOffsetBeats: shiftBarOffset(t.barOffsetBeats, -shift),
   );
 }
 
@@ -136,7 +136,7 @@ List<TimingPoint> followDrift(
 
   // --- A timing point every few bars, merged while the tempo holds -------------------
   final points = <TimingPoint>[];
-  int bar(int beatIndex) => ((t.barOffsetBeats - beatIndex) % 4 + 4) % 4;
+  int bar(int beatIndex) => shiftBarOffset(t.barOffsetBeats, beatIndex);
   var startIndex = 0;
   var startTime = beats.first;
   var length = beats.length > beatsPerPoint ? (beats[beatsPerPoint] - beats[0]) / beatsPerPoint : period0;

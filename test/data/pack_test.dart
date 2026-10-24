@@ -183,4 +183,31 @@ void main() {
     expect(await a.scores(), hasLength(1));
     expect(Directory(a.paths.songDir(song.id)).existsSync(), isFalse);
   });
+
+  test('replacing difficulties swaps the index and the files', () async {
+    final a = await makeRepo(Directory(p.join(tmp.path, 'a')));
+    final song = await addSong(a, 'song1');
+    final old = await a.beatmaps();
+    final analysis = (await a.analysis(song.id))!;
+    final fresh = [
+      for (final b in old)
+        BeatmapGenerator.generate(
+          analysis: analysis,
+          songId: song.id,
+          mode: b.mode,
+          params: DifficultyParams.preset(b.mode, DifficultyPreset.hard),
+          seed: 4,
+          metadata: const BeatmapMetadata(title: 'Clicks', artist: 'Test', creator: 'gen'),
+        ),
+    ];
+    final summaries = await a.replaceBeatmaps(old, fresh);
+    expect(summaries.map((s) => s.id), fresh.map((m) => m.id));
+    expect((await a.beatmaps()).map((s) => s.id).toSet(), fresh.map((m) => m.id).toSet());
+    for (final b in old) {
+      expect(File(a.paths.mapFile(b.songId, b.id)).existsSync(), isFalse);
+    }
+    for (final m in fresh) {
+      expect((await a.loadBeatmap(m.songId, m.id)).objectCount, m.objectCount);
+    }
+  });
 }

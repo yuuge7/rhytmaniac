@@ -159,7 +159,7 @@ List<TimingPoint> detectTimingSections({
       points.add(TimingPoint(
         timeMs: at,
         beatLengthMs: g.beatMs,
-        barOffsetBeats: ((bar - beatsIn) % 4 + 4) % 4,
+        barOffsetBeats: shiftBarOffset(bar, beatsIn),
         triplet: stretches[k].triplet,
       ));
     }

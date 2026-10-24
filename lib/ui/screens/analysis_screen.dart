@@ -26,7 +26,6 @@ class AnalysisScreen extends ConsumerStatefulWidget {
 
 class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   SongAnalysis? _a;
-  BeatGrid? _grid;
   List<TimeRange> _breaks = const [];
   AudioLease? _lease;
   MusicPlayer get _player => _lease!.player;
@@ -51,12 +50,16 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   Future<void> _load() async {
     final services = ref.read(servicesProvider);
     final a = await services.repo.analysis(widget.song.id);
-    _lease = await AppAudio.instance.open(services.paths.sourceFile(widget.song.id, widget.song.sourceFile));
+    final lease = await AppAudio.instance.open(services.paths.sourceFile(widget.song.id, widget.song.sourceFile));
+    // Left while loading: dispose() already ran and can't release these.
+    if (!mounted) {
+      lease.release();
+      return;
+    }
+    _lease = lease;
     _posTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _poll());
-    if (!mounted) return;
     setState(() {
       _a = a;
-      _grid = a?.grid;
       _breaks = a == null ? const [] : findBreaks(a);
     });
   }
@@ -97,10 +100,9 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
   @override
   Widget build(BuildContext context) {
     final a = _a;
-    final grid = _grid;
     return Scaffold(
       appBar: AppBar(title: const Text('Beat analysis')),
-      body: a == null || grid == null
+      body: a == null
           ? const Center(child: CircularProgressIndicator())
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -142,7 +144,7 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
                       Positioned.fill(
                         child: RepaintBoundary(
                           child: CustomPaint(
-                            painter: _AnalysisPainter(a, grid, _breaks, _pxPerSec, scroll: _scroll, position: _pos),
+                            painter: _AnalysisPainter(a, _breaks, _pxPerSec, scroll: _scroll, position: _pos),
                           ),
                         ),
                       ),
@@ -226,10 +228,10 @@ class _AnalysisScreenState extends ConsumerState<AnalysisScreen> {
 /// It used to paint the whole song into one canvas tens of thousands of
 /// pixels wide, which stalled the raster thread for seconds.
 class _AnalysisPainter extends CustomPainter {
-  _AnalysisPainter(this.a, this.grid, this.breaks, this.pxPerSec, {required this.scroll, required this.position})
+  _AnalysisPainter(this.a, this.breaks, this.pxPerSec, {required this.scroll, required this.position})
       : super(repaint: Listenable.merge([scroll, position]));
   final SongAnalysis a;
-  final BeatGrid grid;
+  BeatGrid get grid => a.grid;
   final List<TimeRange> breaks;
   final double pxPerSec;
   final ScrollController scroll;
@@ -334,5 +336,5 @@ class _AnalysisPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_AnalysisPainter old) =>
-      old.pxPerSec != pxPerSec || old.a != a || old.grid != grid || old.breaks != breaks;
+      old.pxPerSec != pxPerSec || old.a != a || old.breaks != breaks;
 }

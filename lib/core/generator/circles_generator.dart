@@ -23,6 +23,18 @@ List<CircleObject> generateCircles(SongAnalysis a, DifficultyParams p, int seed)
   return placeCircles(candidates, a, p, seed);
 }
 
+/// How many times a slider [beats] long turns back so that every pass
+/// lasts whole beats: 2 to 4 passes, or none when it can't split so (5 or
+/// 7 beats, or not a whole number of beats).
+int sliderTurns(double beats) {
+  final whole = beats.round();
+  if (whole < 2 || (beats - whole).abs() >= 0.05) return 0;
+  for (var spans = 4; spans >= 2; spans--) {
+    if (whole % spans == 0) return spans - 1;
+  }
+  return 0;
+}
+
 List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, DifficultyParams p, int seed) {
   final rng = Rng(seed ^ 0xC1C1E5);
   final grid = a.grid;
@@ -195,10 +207,7 @@ List<CircleObject> placeCircles(List<NoteCandidate> candidates, SongAnalysis a, 
       // Two beats or more: a short track travelled back and forth, turning
       // on the beats, instead of one long path across the screen.
       var repeats = 0;
-      if (beats >= 1.9 && p.snapDivisor > 1 && rng.chance(0.55)) {
-        final whole = beats.round();
-        if ((beats - whole).abs() < 0.05) repeats = (whole - 1).clamp(1, 3);
-      }
+      if (beats >= 1.9 && p.snapDivisor > 1 && rng.chance(0.55)) repeats = sliderTurns(beats);
       final spanBeats = beats / (repeats + 1);
       final length = (0.17 * p.spacing * spanBeats).clamp(0.12, repeats > 0 ? 0.32 : 0.6);
       List<Point2>? ctrl;

@@ -178,8 +178,10 @@ String formatAgo(DateTime t) {
   return '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
 }
 
-void showMessage(BuildContext context, String text) {
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(text)));
+/// Shows [text] in a snackbar, replacing the one on screen; with
+/// [queue], after it instead.
+void showMessage(BuildContext context, String text, {bool queue = false}) {
+  final messenger = ScaffoldMessenger.of(context);
+  if (!queue) messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(SnackBar(content: Text(text)));
 }

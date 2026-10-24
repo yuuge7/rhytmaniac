@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhytmaniac/core/analysis/analyzer.dart';
 import 'package:rhytmaniac/core/audio/pcm.dart';
 import 'package:rhytmaniac/core/generator/beatmap_generator.dart';
+import 'package:rhytmaniac/core/generator/circles_generator.dart';
 import 'package:rhytmaniac/core/generator/note_selection.dart';
 import 'package:rhytmaniac/core/models/analysis.dart';
 import 'package:rhytmaniac/core/models/beatmap.dart';
@@ -117,6 +118,22 @@ void main() {
       for (var i = 1; i < map.circleObjects.length; i++) {
         expect(map.circleObjects[i].comboIndex, greaterThanOrEqualTo(map.circleObjects[i - 1].comboIndex));
       }
+    }
+  });
+
+  test('repeating sliders turn on the beat', () {
+    expect(sliderTurns(2), 1);
+    expect(sliderTurns(3), 2);
+    expect(sliderTurns(4), 3);
+    expect(sliderTurns(6), 2); // 3 passes of 2 beats
+    expect(sliderTurns(8), 3); // 4 passes of 2 beats
+    expect(sliderTurns(5), 0); // can't split into whole beats
+    expect(sliderTurns(7), 0);
+    expect(sliderTurns(2.5), 0);
+    expect(sliderTurns(1.97), 1);
+    for (var beats = 2; beats <= 12; beats++) {
+      final turns = sliderTurns(beats.toDouble());
+      if (turns > 0) expect(beats % (turns + 1), 0, reason: '$beats beats, $turns turns');
     }
   });
 
