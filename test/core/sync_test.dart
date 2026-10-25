@@ -143,36 +143,41 @@ void main() {
       }
     }
     final a = analyze(s);
-    final map = BeatmapGenerator.generate(
-      analysis: a,
-      songId: 's',
-      mode: GameMode.tiles,
-      params: DifficultyParams.preset(GameMode.tiles, DifficultyPreset.hard),
-      seed: 3,
-      metadata: const BeatmapMetadata(title: '', artist: '', creator: ''),
-    );
-    final notes = map.tileNotes;
-    // Consecutive single notes half a beat apart inside the runs: does the
-    // lane move the way the pitch does?
-    var agree = 0, total = 0;
-    for (var i = 1; i < notes.length; i++) {
-      final x = notes[i - 1], y = notes[i];
-      if ((y.timeMs - x.timeMs - beat / 2).abs() > 5 || x.lane == y.lane) continue;
-      final ox = a.onsets.where((o) => (o.timeMs - x.timeMs).abs() < 25 && o.tone != null).toList();
-      final oy = a.onsets.where((o) => (o.timeMs - y.timeMs).abs() < 25 && o.tone != null).toList();
-      if (ox.isEmpty || oy.isEmpty) continue;
-      final dTone = oy.last.tone! - ox.last.tone!;
-      if (dTone.abs() < 0.015) continue;
-      // At the edge of the field a climb has to turn back.
-      if (dTone > 0 ? x.lane == 3 : x.lane == 0) continue;
-      total++;
-      if ((y.lane > x.lane) == (dTone > 0)) agree++;
+    // Lanes and holds are drawn at random, and one map has only 16 pads, so
+    // a single seed swings a lot (rounding differences between platforms are
+    // enough to land on a bad one). Pool several seeds.
+    var agree = 0, total = 0, holdsOnPads = 0, notedPads = 0;
+    for (final seed in [1, 3, 7, 42]) {
+      final map = BeatmapGenerator.generate(
+        analysis: a,
+        songId: 's',
+        mode: GameMode.tiles,
+        params: DifficultyParams.preset(GameMode.tiles, DifficultyPreset.hard),
+        seed: seed,
+        metadata: const BeatmapMetadata(title: '', artist: '', creator: ''),
+      );
+      final notes = map.tileNotes;
+      // Consecutive single notes half a beat apart inside the runs: does the
+      // lane move the way the pitch does?
+      for (var i = 1; i < notes.length; i++) {
+        final x = notes[i - 1], y = notes[i];
+        if ((y.timeMs - x.timeMs - beat / 2).abs() > 5 || x.lane == y.lane) continue;
+        final ox = a.onsets.where((o) => (o.timeMs - x.timeMs).abs() < 25 && o.tone != null).toList();
+        final oy = a.onsets.where((o) => (o.timeMs - y.timeMs).abs() < 25 && o.tone != null).toList();
+        if (ox.isEmpty || oy.isEmpty) continue;
+        final dTone = oy.last.tone! - ox.last.tone!;
+        if (dTone.abs() < 0.015) continue;
+        // At the edge of the field a climb has to turn back.
+        if (dTone > 0 ? x.lane == 3 : x.lane == 0) continue;
+        total++;
+        if ((y.lane > x.lane) == (dTone > 0)) agree++;
+      }
+      holdsOnPads += pads.where((t) => notes.any((n) => n.isHold && (n.timeMs - t).abs() < 15)).length;
+      notedPads += pads.where((t) => notes.any((n) => (n.timeMs - t).abs() < 15)).length;
     }
-    final holdsOnPads = pads.where((t) => notes.any((n) => n.isHold && (n.timeMs - t).abs() < 15)).length;
-    final notedPads = pads.where((t) => notes.any((n) => (n.timeMs - t).abs() < 15)).length;
     // ignore: avoid_print
     print('melody: lane follows pitch $agree/$total; held sounds as holds $holdsOnPads/$notedPads');
-    expect(total, greaterThan(15));
+    expect(total, greaterThan(60));
     expect(agree / total, greaterThan(0.8));
     expect(holdsOnPads / notedPads, greaterThan(0.6));
   });
