@@ -439,6 +439,7 @@ class _PlayRow extends StatelessWidget {
           if (rank != null)
             SizedBox(width: 26, child: Text('$rank', style: AppText.data(12.5, color: Palette.dim))),
           SizedBox(width: 38, child: s.failed ? Text('F', style: AppText.display(20, width: 140, weight: 900, color: Palette.dim)) : GradeMark(s.grade, size: 20)),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

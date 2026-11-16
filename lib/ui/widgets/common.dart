@@ -104,8 +104,16 @@ class GradeMark extends StatelessWidget {
   final double size;
 
   @override
-  Widget build(BuildContext context) =>
-      Text(grade.label, style: AppText.display(size, width: 140, weight: 900, color: Palette.grade(grade)));
+  Widget build(BuildContext context) => FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(
+          grade.label,
+          maxLines: 1,
+          softWrap: false,
+          style: AppText.display(size, width: 140, weight: 900, color: Palette.grade(grade)),
+        ),
+      );
 }
 
 /// Two-option segmented control for Tiles / Circles.
